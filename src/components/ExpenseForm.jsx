@@ -1,16 +1,34 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { collection, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 
 export default function ExpenseForm({ user }) {
   const [monto, setMonto] = useState('');
-  const [categoria, setCategoria] = useState('Supermercado');
-  const [hogar, setHogar] = useState('Ciudad de la Costa');
+  const [categoria, setCategoria] = useState('');
+  const [ubicacion, setUbicacion] = useState('');
   const [kilometraje, setKilometraje] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const categorias = ['Supermercado', 'Auto', 'Casa', 'Mascotas', 'Asado & Salidas', 'Camping & Viajes', 'Servicios'];
-  const hogares = ['Ciudad de la Costa', 'Montevideo', 'Otro'];
+  // Estados para las listas dinámicas
+  const [categorias, setCategorias] = useState([]);
+  const [ubicaciones, setUbicaciones] = useState([]);
+
+  useEffect(() => {
+    // Cargar opciones desde Firestore
+    const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
+      const cats = snapshot.docs.map(doc => doc.data().nombre);
+      setCategorias(cats);
+      if (cats.length > 0 && !categoria) setCategoria(cats[0]); // Seleccionar el primero por defecto
+    });
+    
+    const unsubUbi = onSnapshot(collection(db, 'ubicaciones'), (snapshot) => {
+      const ubis = snapshot.docs.map(doc => doc.data().nombre);
+      setUbicaciones(ubis);
+      if (ubis.length > 0 && !ubicacion) setUbicacion(ubis[0]);
+    });
+
+    return () => { unsubCat(); unsubUbi(); };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -22,31 +40,32 @@ export default function ExpenseForm({ user }) {
         userId: user.uid,
         monto: parseFloat(monto),
         categoria,
-        hogar,
+        ubicacion, // Cambiado de "hogar" a "ubicacion" para mayor flexibilidad
         fecha: serverTimestamp(),
       });
 
-      if (categoria === 'Auto' && kilometraje) {
+      if (categoria.toLowerCase() === 'auto' && kilometraje) {
         const vehiculoRef = doc(db, 'vehiculos', 'auto_principal'); 
         await updateDoc(vehiculoRef, { kilometraje_actual: Number(kilometraje) });
       }
 
       setMonto('');
       setKilometraje('');
-      // Aquí podrías agregar un toast nativo o una pequeña vibración (haptic feedback) en el futuro
+      alert('¡Gasto guardado con éxito!');
     } catch (error) {
-      console.error(error);
+      console.error("Detalle del error:", error);
+      alert('Error al guardar. Revisá la consola para más detalles: ' + error.message);
     }
     setLoading(false);
   };
 
   return (
-    <div className="pt-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="pt-4 animate-in fade-in duration-500">
       <form onSubmit={handleSubmit} className="flex flex-col h-full">
         
         {/* Input Monto Gigante */}
         <div className="flex flex-col items-center justify-center py-8">
-          <span className="text-zinc-400 font-medium mb-2">Cuánto gastaste?</span>
+          <span className="text-zinc-400 font-medium mb-2">¿Cuánto gastaste?</span>
           <div className="flex items-center justify-center text-emerald-500">
             <span className="text-4xl font-bold mr-1">$</span>
             <input 
@@ -61,65 +80,69 @@ export default function ExpenseForm({ user }) {
           </div>
         </div>
 
-        {/* Categorías con Scroll Horizontal (Pills) */}
-        <div className="mb-6">
-          <div className="flex overflow-x-auto pb-4 gap-2 no-scrollbar snap-x">
-            {categorias.map(cat => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setCategoria(cat)}
-                className={`snap-start whitespace-nowrap px-5 py-3 rounded-2xl text-sm font-semibold transition-all ${
-                  categoria === cat 
-                    ? 'bg-zinc-900 text-white shadow-md' 
-                    : 'bg-white text-zinc-500 border border-zinc-200'
-                }`}
+        <div className="space-y-6 mb-8 bg-white p-6 rounded-[2rem] border border-zinc-100 shadow-sm">
+          
+          {/* Select de Categoría */}
+          <div>
+            <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 ml-1">Categoría</label>
+            <div className="relative">
+              <select 
+                value={categoria}
+                onChange={(e) => setCategoria(e.target.value)}
+                className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500 appearance-none"
               >
-                {cat}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Input condicional para el Auto */}
-        <div className={`transition-all duration-300 overflow-hidden ${categoria === 'Auto' ? 'max-h-24 mb-6 opacity-100' : 'max-h-0 opacity-0'}`}>
-          <div className="bg-white p-4 rounded-2xl border border-zinc-200 flex items-center shadow-sm">
-            <span className="text-2xl mr-3">🚗</span>
-            <div className="flex-1">
-              <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1">Km al cargar</label>
-              <input 
-                type="number" 
-                value={kilometraje}
-                onChange={(e) => setKilometraje(e.target.value)}
-                className="w-full text-lg font-bold text-zinc-800 outline-none"
-                placeholder="Ej: 85000"
-                inputMode="numeric"
-              />
+                {categorias.length === 0 && <option value="">Cargando...</option>}
+                {categorias.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+              {/* Flecha personalizada para el select */}
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-zinc-500">
+                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Selector de Hogar */}
-        <div className="mb-8">
-          <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3 ml-1">Lugar del Gasto</label>
-          <div className="grid grid-cols-2 gap-2">
-            {hogares.slice(0, 2).map(h => (
-              <button
-                key={h}
-                type="button"
-                onClick={() => setHogar(h)}
-                className={`py-3 px-4 rounded-xl text-sm font-medium transition-all ${hogar === h ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-white text-zinc-600 border border-zinc-200'}`}
-              >
-                {h}
-              </button>
-            ))}
+          {/* Input condicional para el Auto */}
+          <div className={`transition-all duration-300 overflow-hidden ${categoria.toLowerCase() === 'auto' ? 'max-h-24 opacity-100' : 'max-h-0 opacity-0'}`}>
+            <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-center">
+              <span className="text-2xl mr-3">🚗</span>
+              <div className="flex-1">
+                <label className="block text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">Km al cargar</label>
+                <input 
+                  type="number" 
+                  value={kilometraje}
+                  onChange={(e) => setKilometraje(e.target.value)}
+                  className="w-full text-lg font-bold text-emerald-900 bg-transparent outline-none placeholder-emerald-300"
+                  placeholder="Ej: 85000"
+                  inputMode="numeric"
+                />
+              </div>
+            </div>
           </div>
+
+          {/* Select de Ubicación */}
+          <div>
+            <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 ml-1">Lugar del Gasto</label>
+            <div className="relative">
+              <select 
+                value={ubicacion}
+                onChange={(e) => setUbicacion(e.target.value)}
+                className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500 appearance-none"
+              >
+                {ubicaciones.length === 0 && <option value="">Cargando...</option>}
+                {ubicaciones.map(ubi => <option key={ubi} value={ubi}>{ubi}</option>)}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-zinc-500">
+                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         {/* Botón Guardar Flotante */}
         <button 
           type="submit" 
-          disabled={loading || !monto}
+          disabled={loading || !monto || categorias.length === 0}
           className="w-full bg-emerald-500 text-white font-bold text-lg py-4 rounded-2xl shadow-lg shadow-emerald-500/30 active:scale-95 transition-all disabled:opacity-50 disabled:active:scale-100 disabled:shadow-none"
         >
           {loading ? 'Registrando...' : 'Registrar Gasto'}
