@@ -23,7 +23,7 @@ export default function ExpenseHistory({ user }) {
   const [gastos, setGastos] = useState([]);
   const [mes, setMes] = useState(currentMonth());
   const [editando, setEditando] = useState(null);
-  const [form, setForm] = useState({ monto: '', categoria: '', subcategoria: '', ubicacion: '', gastoFijo: false });
+  const [form, setForm] = useState({ monto: '', tipoDestino: 'general', categoria: '', subcategoria: '', ubicacion: '', gastoFijo: false });
 
   useEffect(() => {
     const q = query(collection(db, 'gastos'), where('userId', '==', user.uid));
@@ -43,6 +43,7 @@ export default function ExpenseHistory({ user }) {
     setEditando(gasto.id);
     setForm({
       monto: gasto.monto || '',
+      tipoDestino: gasto.tipoDestino || 'general',
       categoria: gasto.categoriaGrupo || '',
       subcategoria: gasto.subcategoria || gasto.categoria || '',
       ubicacion: gasto.ubicacion || '',
@@ -52,12 +53,13 @@ export default function ExpenseHistory({ user }) {
 
   const cancelar = () => {
     setEditando(null);
-    setForm({ monto: '', categoria: '', subcategoria: '', ubicacion: '', gastoFijo: false });
+    setForm({ monto: '', tipoDestino: 'general', categoria: '', subcategoria: '', ubicacion: '', gastoFijo: false });
   };
 
   const guardar = async (gasto) => {
     await updateDoc(doc(db, 'gastos', gasto.id), {
       monto: Number(form.monto),
+      tipoDestino: form.tipoDestino,
       categoriaGrupo: form.categoria,
       categoria: form.subcategoria || form.categoria,
       subcategoria: form.subcategoria,
@@ -100,6 +102,12 @@ export default function ExpenseHistory({ user }) {
             {editando === gasto.id ? (
               <div className="space-y-3">
                 <input type="number" value={form.monto} onChange={e => setForm({ ...form, monto: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold" />
+                <select value={form.tipoDestino} onChange={e => setForm({ ...form, tipoDestino: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
+                  <option value="general">General</option>
+                  <option value="vehiculo">Vehículo</option>
+                  <option value="hogar">Casa</option>
+                  <option value="tarjeta">Tarjeta</option>
+                </select>
                 <div className="grid grid-cols-2 gap-2">
                   <input value={form.categoria} onChange={e => setForm({ ...form, categoria: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none" placeholder="Categoría" />
                   <input value={form.subcategoria} onChange={e => setForm({ ...form, subcategoria: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none" placeholder="Subcategoría" />

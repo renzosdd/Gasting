@@ -10,6 +10,10 @@ service firebase.storage {
       allow read, write: if signedIn() && request.auth.uid == userId;
     }
 
+    match /hogares/{userId}/{fileName} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
+    }
+
     match /estados-cuenta/{userId}/{fileName} {
       allow read, write: if signedIn() && request.auth.uid == userId;
     }

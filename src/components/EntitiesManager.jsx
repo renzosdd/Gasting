@@ -1,11 +1,40 @@
 import { useEffect, useState } from 'react';
-import { db } from '../firebase';
+import { db, storage } from '../firebase';
 import { addDoc, collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
-import { CarFront, CreditCard, Edit3, Home, MapPin, Plus, X } from 'lucide-react';
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { CarFront, CreditCard, Edit3, Home, Image as ImageIcon, MapPin, Plus, Trash2, X } from 'lucide-react';
 
-const EMPTY_VEHICULO = { nombre: '', marca: '', modelo: '', anio: '', tipo_motor: 'Nafta', kilometraje_actual: '' };
-const EMPTY_HOGAR = { nombre: '', direccion: '' };
+const EMPTY_VEHICULO = { nombre: '', marca: '', modelo: '', anio: '', tipo_motor: 'Nafta', kilometraje_actual: '', fotoUrl: '' };
+const EMPTY_HOGAR = { nombre: '', direccion: '', fotoUrl: '', servicios: [] };
 const EMPTY_TARJETA = { nombre: '', banco: '', marca: 'Visa', ultimos4: '', diaCierre: '', diaVencimiento: '' };
+const EMPTY_SERVICIO = { nombre: '', numeroCuenta: '', diaPago: '', proveedor: '' };
+
+const compressImage = (file, maxSize = 900, quality = 0.72) => new Promise((resolve, reject) => {
+  const image = new Image();
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    image.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error('No se pudo comprimir la imagen.'));
+          return;
+        }
+        resolve(new File([blob], `${file.name.replace(/\.[^.]+$/, '')}.jpg`, { type: 'image/jpeg' }));
+      }, 'image/jpeg', quality);
+    };
+    image.onerror = reject;
+    image.src = reader.result;
+  };
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+});
 
 export default function EntitiesManager({ user }) {
   const [tab, setTab] = useState('vehiculos');
@@ -16,6 +45,9 @@ export default function EntitiesManager({ user }) {
   const [formVehiculo, setFormVehiculo] = useState(EMPTY_VEHICULO);
   const [formHogar, setFormHogar] = useState(EMPTY_HOGAR);
   const [formTarjeta, setFormTarjeta] = useState(EMPTY_TARJETA);
+  const [fotoVehiculoFile, setFotoVehiculoFile] = useState(null);
+  const [fotoHogarFile, setFotoHogarFile] = useState(null);
+  const [servicioForm, setServicioForm] = useState(EMPTY_SERVICIO);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -41,6 +73,9 @@ export default function EntitiesManager({ user }) {
     setFormVehiculo(EMPTY_VEHICULO);
     setFormHogar(EMPTY_HOGAR);
     setFormTarjeta(EMPTY_TARJETA);
+    setFotoVehiculoFile(null);
+    setFotoHogarFile(null);
+    setServicioForm(EMPTY_SERVICIO);
   };
 
   const cambiarTab = (nuevoTab) => {
@@ -57,12 +92,13 @@ export default function EntitiesManager({ user }) {
       anio: vehiculo.anio || '',
       tipo_motor: vehiculo.tipo_motor || 'Nafta',
       kilometraje_actual: vehiculo.kilometraje_actual || '',
+      fotoUrl: vehiculo.fotoUrl || '',
     });
   };
 
   const editarHogar = (hogar) => {
     setEditandoId(hogar.id);
-    setFormHogar({ nombre: hogar.nombre || '', direccion: hogar.direccion || '' });
+    setFormHogar({ nombre: hogar.nombre || '', direccion: hogar.direccion || '', fotoUrl: hogar.fotoUrl || '', servicios: hogar.servicios || [] });
   };
 
   const editarTarjeta = (tarjeta) => {
@@ -77,21 +113,46 @@ export default function EntitiesManager({ user }) {
     });
   };
 
+  const uploadCompressedImage = async (file, folder) => {
+    if (!file) return null;
+    const compressed = await compressImage(file);
+    const imageRef = ref(storage, `${folder}/${user.uid}/${Date.now()}_${compressed.name}`);
+    const snapshot = await uploadBytes(imageRef, compressed);
+    return getDownloadURL(snapshot.ref);
+  };
+
+  const agregarServicio = () => {
+    if (!servicioForm.nombre.trim()) return;
+    setFormHogar((actual) => ({
+      ...actual,
+      servicios: [...(actual.servicios || []), { ...servicioForm, diaPago: Number(servicioForm.diaPago) || '' }],
+    }));
+    setServicioForm(EMPTY_SERVICIO);
+  };
+
+  const quitarServicio = (index) => {
+    setFormHogar((actual) => ({
+      ...actual,
+      servicios: (actual.servicios || []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
   const guardarVehiculo = async (e) => {
     e.preventDefault();
     setLoading(true);
-    const payload = {
-      propietarios: [user.uid],
-      nombre: formVehiculo.nombre,
-      marca: formVehiculo.marca,
-      modelo: formVehiculo.modelo,
-      anio: Number(formVehiculo.anio),
-      tipo_motor: formVehiculo.tipo_motor,
-      kilometraje_actual: Number(formVehiculo.kilometraje_actual),
-      fotoUrl: null,
-    };
     try {
-      if (editandoId) await updateDoc(doc(db, 'vehiculos', editandoId), payload);
+      const fotoUrl = await uploadCompressedImage(fotoVehiculoFile, 'vehiculos');
+      const payload = {
+        propietarios: [user.uid],
+        nombre: formVehiculo.nombre,
+        marca: formVehiculo.marca,
+        modelo: formVehiculo.modelo,
+        anio: Number(formVehiculo.anio),
+        tipo_motor: formVehiculo.tipo_motor,
+        kilometraje_actual: Number(formVehiculo.kilometraje_actual),
+        fotoUrl: fotoUrl || formVehiculo.fotoUrl || null,
+      };
+      if (editandoId && editandoId !== 'nuevo') await updateDoc(doc(db, 'vehiculos', editandoId), payload);
       else await addDoc(collection(db, 'vehiculos'), payload);
       reset();
     } catch (error) {
@@ -103,9 +164,16 @@ export default function EntitiesManager({ user }) {
   const guardarHogar = async (e) => {
     e.preventDefault();
     setLoading(true);
-    const payload = { propietarios: [user.uid], nombre: formHogar.nombre, direccion: formHogar.direccion };
     try {
-      if (editandoId) await updateDoc(doc(db, 'hogares', editandoId), payload);
+      const fotoUrl = await uploadCompressedImage(fotoHogarFile, 'hogares');
+      const payload = {
+        propietarios: [user.uid],
+        nombre: formHogar.nombre,
+        direccion: formHogar.direccion,
+        fotoUrl: fotoUrl || formHogar.fotoUrl || null,
+        servicios: formHogar.servicios || [],
+      };
+      if (editandoId && editandoId !== 'nuevo') await updateDoc(doc(db, 'hogares', editandoId), payload);
       else await addDoc(collection(db, 'hogares'), payload);
       reset();
     } catch (error) {
@@ -127,7 +195,7 @@ export default function EntitiesManager({ user }) {
       diaVencimiento: Number(formTarjeta.diaVencimiento),
     };
     try {
-      if (editandoId) await updateDoc(doc(db, 'tarjetas', editandoId), payload);
+      if (editandoId && editandoId !== 'nuevo') await updateDoc(doc(db, 'tarjetas', editandoId), payload);
       else await addDoc(collection(db, 'tarjetas'), payload);
       reset();
     } catch (error) {
@@ -158,8 +226,8 @@ export default function EntitiesManager({ user }) {
         <div className="space-y-6">
           {!editandoId && vehiculos.map(vehiculo => (
             <div key={vehiculo.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-100 flex gap-4 items-center">
-              <div className="w-16 h-16 rounded-2xl bg-emerald-50 flex-shrink-0 flex items-center justify-center text-emerald-600 border border-emerald-100">
-                <CarFront size={30} />
+              <div className="w-16 h-16 rounded-2xl bg-emerald-50 flex-shrink-0 flex items-center justify-center text-emerald-600 border border-emerald-100 overflow-hidden">
+                {vehiculo.fotoUrl ? <img src={vehiculo.fotoUrl} alt={vehiculo.nombre} className="w-full h-full object-cover" /> : <CarFront size={30} />}
               </div>
               <div className="flex-1 min-w-0">
                 <span className="text-xs font-bold uppercase tracking-wider text-emerald-500">{vehiculo.tipo_motor || 'Motor'}</span>
@@ -181,6 +249,16 @@ export default function EntitiesManager({ user }) {
                 <h3 className="font-bold text-zinc-800 text-lg">{creando ? 'Nuevo Vehículo' : 'Editar Vehículo'}</h3>
                 <button type="button" onClick={reset} className="p-2 text-zinc-400"><X size={20} /></button>
               </div>
+              <label className="flex items-center gap-3 p-4 bg-zinc-50 border border-dashed border-zinc-300 rounded-2xl cursor-pointer">
+                <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center overflow-hidden text-zinc-400 border border-zinc-100">
+                  {fotoVehiculoFile ? <img src={URL.createObjectURL(fotoVehiculoFile)} alt="Preview" className="w-full h-full object-cover" /> : formVehiculo.fotoUrl ? <img src={formVehiculo.fotoUrl} alt="Vehículo" className="w-full h-full object-cover" /> : <ImageIcon size={22} />}
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-zinc-700">Foto del vehículo</p>
+                  <p className="text-xs text-zinc-400">Se comprime antes de subir.</p>
+                </div>
+                <input type="file" accept="image/*" onChange={(e) => setFotoVehiculoFile(e.target.files?.[0] || null)} className="hidden" />
+              </label>
               <input value={formVehiculo.nombre} onChange={e => setFormVehiculo({ ...formVehiculo, nombre: e.target.value })} placeholder="Apodo" required className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none" />
               <div className="grid grid-cols-2 gap-3">
                 <input value={formVehiculo.marca} onChange={e => setFormVehiculo({ ...formVehiculo, marca: e.target.value })} placeholder="Marca" required className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none" />
@@ -206,10 +284,13 @@ export default function EntitiesManager({ user }) {
         <div className="space-y-6">
           {!editandoId && hogares.map(hogar => (
             <div key={hogar.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-100 flex gap-4 items-center">
-              <div className="w-16 h-16 rounded-2xl bg-blue-50 flex-shrink-0 flex items-center justify-center text-blue-600 border border-blue-100"><Home size={28} /></div>
+              <div className="w-16 h-16 rounded-2xl bg-blue-50 flex-shrink-0 flex items-center justify-center text-blue-600 border border-blue-100 overflow-hidden">
+                {hogar.fotoUrl ? <img src={hogar.fotoUrl} alt={hogar.nombre} className="w-full h-full object-cover" /> : <Home size={28} />}
+              </div>
               <div className="flex-1">
                 <h3 className="text-lg font-bold text-zinc-800 leading-tight">{hogar.nombre || 'Hogar sin nombre'}</h3>
                 <p className="text-sm text-zinc-500 flex items-center gap-1"><MapPin size={14} /> {hogar.direccion || 'Sin dirección'}</p>
+                <p className="text-xs font-bold text-zinc-600 mt-1">{(hogar.servicios || []).length} servicios</p>
               </div>
               <button onClick={() => editarHogar(hogar)} className="p-3 rounded-full bg-zinc-50 text-zinc-500"><Edit3 size={18} /></button>
             </div>
@@ -221,8 +302,38 @@ export default function EntitiesManager({ user }) {
                 <h3 className="font-bold text-zinc-800 text-lg">{creando ? 'Nuevo Hogar' : 'Editar Hogar'}</h3>
                 <button type="button" onClick={reset} className="p-2 text-zinc-400"><X size={20} /></button>
               </div>
+              <label className="flex items-center gap-3 p-4 bg-zinc-50 border border-dashed border-zinc-300 rounded-2xl cursor-pointer">
+                <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center overflow-hidden text-zinc-400 border border-zinc-100">
+                  {fotoHogarFile ? <img src={URL.createObjectURL(fotoHogarFile)} alt="Preview" className="w-full h-full object-cover" /> : formHogar.fotoUrl ? <img src={formHogar.fotoUrl} alt="Hogar" className="w-full h-full object-cover" /> : <ImageIcon size={22} />}
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-zinc-700">Foto del hogar</p>
+                  <p className="text-xs text-zinc-400">Se comprime antes de subir.</p>
+                </div>
+                <input type="file" accept="image/*" onChange={(e) => setFotoHogarFile(e.target.files?.[0] || null)} className="hidden" />
+              </label>
               <input value={formHogar.nombre} onChange={e => setFormHogar({ ...formHogar, nombre: e.target.value })} placeholder="Nombre" required className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none" />
               <input value={formHogar.direccion} onChange={e => setFormHogar({ ...formHogar, direccion: e.target.value })} placeholder="Dirección" className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none" />
+              <div className="space-y-3 p-4 bg-blue-50 border border-blue-100 rounded-2xl">
+                <p className="text-xs font-bold uppercase tracking-wider text-blue-700">Servicios</p>
+                {(formHogar.servicios || []).map((servicio, index) => (
+                  <div key={`${servicio.nombre}-${index}`} className="flex items-center justify-between gap-2 p-3 bg-white rounded-xl border border-blue-100">
+                    <div>
+                      <p className="font-bold text-zinc-800">{servicio.nombre}</p>
+                      <p className="text-xs text-zinc-500">{servicio.proveedor || 'Proveedor'} · Cuenta {servicio.numeroCuenta || '-'}</p>
+                      <p className="text-xs font-bold text-blue-700">Pago día {servicio.diaPago || '-'}</p>
+                    </div>
+                    <button type="button" onClick={() => quitarServicio(index)} className="p-2 text-red-500"><Trash2 size={16} /></button>
+                  </div>
+                ))}
+                <div className="grid grid-cols-2 gap-2">
+                  <input value={servicioForm.nombre} onChange={e => setServicioForm({ ...servicioForm, nombre: e.target.value })} placeholder="Servicio (UTE)" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
+                  <input value={servicioForm.proveedor} onChange={e => setServicioForm({ ...servicioForm, proveedor: e.target.value })} placeholder="Proveedor" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
+                  <input value={servicioForm.numeroCuenta} onChange={e => setServicioForm({ ...servicioForm, numeroCuenta: e.target.value })} placeholder="Nro. cuenta" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
+                  <input type="number" min="1" max="31" value={servicioForm.diaPago} onChange={e => setServicioForm({ ...servicioForm, diaPago: e.target.value })} placeholder="Día pago" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
+                </div>
+                <button type="button" onClick={agregarServicio} className="w-full p-3 rounded-xl bg-blue-600 text-white font-bold">Agregar servicio</button>
+              </div>
               <button type="submit" disabled={loading} className="w-full p-4 rounded-2xl font-bold text-white bg-blue-600 disabled:opacity-50">{loading ? 'Guardando...' : 'Guardar'}</button>
             </form>
           )}
