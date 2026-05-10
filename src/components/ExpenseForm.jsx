@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { db, storage } from '../firebase';
-import { collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { db } from '../firebase';
+import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { CarFront, CreditCard, FileText, Home, Wallet } from 'lucide-react';
 
 const TIPOS_DESTINO = [
@@ -45,7 +44,9 @@ export default function ExpenseForm({ user }) {
   const [ubicacion, setUbicacion] = useState('');
   const [vehiculoId, setVehiculoId] = useState('');
   const [hogarId, setHogarId] = useState('');
+  const [tarjetaId, setTarjetaId] = useState('');
   const [estadoCuentaFile, setEstadoCuentaFile] = useState(null);
+  const [subcategoriaSugerida, setSubcategoriaSugerida] = useState('');
   const [detalles, setDetalles] = useState({});
   const [loading, setLoading] = useState(false);
 
@@ -53,6 +54,7 @@ export default function ExpenseForm({ user }) {
   const [ubicaciones, setUbicaciones] = useState([]);
   const [vehiculos, setVehiculos] = useState([]);
   const [hogares, setHogares] = useState([]);
+  const [tarjetas, setTarjetas] = useState([]);
 
   useEffect(() => {
     const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
@@ -69,6 +71,7 @@ export default function ExpenseForm({ user }) {
   useEffect(() => {
     const vehiculosQuery = query(collection(db, 'vehiculos'), where('propietarios', 'array-contains', user.uid));
     const hogaresQuery = query(collection(db, 'hogares'), where('propietarios', 'array-contains', user.uid));
+    const tarjetasQuery = query(collection(db, 'tarjetas'), where('propietarios', 'array-contains', user.uid));
 
     const unsubVehiculos = onSnapshot(vehiculosQuery, (snapshot) => {
       setVehiculos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -76,8 +79,11 @@ export default function ExpenseForm({ user }) {
     const unsubHogares = onSnapshot(hogaresQuery, (snapshot) => {
       setHogares(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
+    const unsubTarjetas = onSnapshot(tarjetasQuery, (snapshot) => {
+      setTarjetas(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
 
-    return () => { unsubVehiculos(); unsubHogares(); };
+    return () => { unsubVehiculos(); unsubHogares(); unsubTarjetas(); };
   }, [user.uid]);
 
   const categoriasFiltradas = useMemo(() => (
@@ -118,24 +124,20 @@ export default function ExpenseForm({ user }) {
     
     setLoading(true);
     try {
-      let estadoCuenta = null;
-
-      if (tipoDestino === 'tarjeta' && estadoCuentaFile) {
-        const estadoCuentaRef = ref(storage, `estados-cuenta/${user.uid}/${Date.now()}_${estadoCuentaFile.name}`);
-        const snapshot = await uploadBytes(estadoCuentaRef, estadoCuentaFile);
-        estadoCuenta = {
-          nombre: estadoCuentaFile.name,
-          tipo: estadoCuentaFile.type || 'application/pdf',
-          url: await getDownloadURL(snapshot.ref),
-          path: snapshot.ref.fullPath,
-          estado: 'pendiente_analisis',
-        };
-      }
+      const estadoCuenta = tipoDestino === 'tarjeta' && estadoCuentaFile
+        ? {
+            nombre: estadoCuentaFile.name,
+            tipo: estadoCuentaFile.type || 'application/pdf',
+            estado: 'pendiente_storage',
+          }
+        : null;
 
       const batch = writeBatch(db);
       const gastoRef = doc(collection(db, 'gastos'));
       const vehiculoSeleccionado = vehiculos.find(vehiculo => vehiculo.id === vehiculoId);
       const hogarSeleccionado = hogares.find(hogar => hogar.id === hogarId);
+      const tarjetaSeleccionada = tarjetas.find(tarjeta => tarjeta.id === tarjetaId);
+      const subcategoriaFinal = subcategoriaSugerida.trim() || subcategoria;
 
       batch.set(gastoRef, {
         userId: user.uid,
@@ -143,13 +145,15 @@ export default function ExpenseForm({ user }) {
         tipoDestino,
         categoriaId: categoriaId || null,
         categoriaGrupo: getCategoriaNombre(),
-        categoria: subcategoria || getCategoriaNombre(),
-        subcategoria: subcategoria || null,
+        categoria: subcategoriaFinal || getCategoriaNombre(),
+        subcategoria: subcategoriaFinal || null,
         ubicacion,
         vehiculoId: tipoDestino === 'vehiculo' && vehiculoId ? vehiculoId : null,
         vehiculoNombre: tipoDestino === 'vehiculo' && vehiculoSeleccionado ? vehiculoSeleccionado.nombre || `${vehiculoSeleccionado.marca} ${vehiculoSeleccionado.modelo}` : null,
         hogarId: tipoDestino === 'hogar' && hogarId ? hogarId : null,
         hogarNombre: tipoDestino === 'hogar' && hogarSeleccionado ? hogarSeleccionado.nombre : null,
+        tarjetaId: tipoDestino === 'tarjeta' && tarjetaId ? tarjetaId : null,
+        tarjetaNombre: tipoDestino === 'tarjeta' && tarjetaSeleccionada ? tarjetaSeleccionada.nombre || `${tarjetaSeleccionada.banco} ${tarjetaSeleccionada.marca}` : null,
         detalles,
         gastoFijo: Boolean(detalles.gastoFijo),
         estadoCuenta,
@@ -157,6 +161,18 @@ export default function ExpenseForm({ user }) {
         origen: tipoDestino === 'tarjeta' ? 'tarjeta_credito' : 'manual',
         fecha: serverTimestamp(),
       });
+
+      if (subcategoriaSugerida.trim()) {
+        await addDoc(collection(db, 'subcategoria_sugerencias'), {
+          userId: user.uid,
+          categoriaId,
+          categoriaNombre: getCategoriaNombre(),
+          tipoDestino,
+          nombre: subcategoriaSugerida.trim(),
+          estado: 'pendiente',
+          fecha: serverTimestamp(),
+        });
+      }
 
       if (tipoDestino === 'vehiculo' && vehiculoId && detalles.kilometraje) {
         batch.update(doc(db, 'vehiculos', vehiculoId), { kilometraje_actual: Number(detalles.kilometraje) });
@@ -166,6 +182,7 @@ export default function ExpenseForm({ user }) {
 
       setMonto('');
       setEstadoCuentaFile(null);
+      setSubcategoriaSugerida('');
       setDetalles({});
       alert('¡Gasto guardado con éxito!');
     } catch (error) {
@@ -240,6 +257,13 @@ export default function ExpenseForm({ user }) {
                 return <option key={nombre} value={nombre}>{nombre}</option>;
               })}
             </select>
+            <input
+              value={subcategoriaSugerida}
+              onChange={(e) => setSubcategoriaSugerida(e.target.value)}
+              className="w-full mt-2 p-3 bg-white border border-dashed border-zinc-300 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
+              placeholder="Sugerir otra subcategoría..."
+            />
+            {subcategoriaSugerida && <p className="mt-2 text-xs font-medium text-zinc-500">Se guarda en este gasto y queda pendiente para que un admin la apruebe.</p>}
           </div>
 
           {tipoDestino === 'vehiculo' && (
@@ -275,9 +299,23 @@ export default function ExpenseForm({ user }) {
           )}
 
           {tipoDestino === 'tarjeta' && (
-            <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 flex items-start">
-              <FileText className="text-indigo-700 mr-3 mt-1" size={28} />
-              <div className="flex-1">
+            <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-indigo-700 uppercase tracking-wider mb-2">Tarjeta opcional</label>
+                <select
+                  value={tarjetaId}
+                  onChange={(e) => setTarjetaId(e.target.value)}
+                  className="w-full p-3 bg-white border border-indigo-100 rounded-xl text-indigo-900 font-medium outline-none"
+                >
+                  <option value="">Sin asociar</option>
+                  {tarjetas.map(tarjeta => (
+                    <option key={tarjeta.id} value={tarjeta.id}>{tarjeta.nombre || `${tarjeta.banco} ${tarjeta.marca}`}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-start">
+                <FileText className="text-indigo-700 mr-3 mt-1" size={28} />
+                <div className="flex-1">
                 <label className="block text-xs font-bold text-indigo-700 uppercase tracking-wider mb-1">Estado de cuenta opcional</label>
                 <input
                   type="file"
@@ -285,8 +323,9 @@ export default function ExpenseForm({ user }) {
                   onChange={handleEstadoCuentaChange}
                   className="w-full text-sm text-indigo-900 file:mr-3 file:rounded-xl file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"
                 />
-                <p className="mt-2 text-xs text-indigo-700">Podés subirlo ahora o cargar el pago y analizar el PDF después.</p>
+                <p className="mt-2 text-xs text-indigo-700">No se sube a Firebase Storage. Queda registrado el nombre para cargarlo cuando definamos almacenamiento.</p>
                 {estadoCuentaFile && <p className="mt-2 text-xs font-medium text-indigo-700">{estadoCuentaFile.name}</p>}
+                </div>
               </div>
             </div>
           )}

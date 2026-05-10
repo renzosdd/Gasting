@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import { auth, db, loginConGoogle, logout } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { LogOut, Plus, BarChart3, Wallet, Settings, User } from 'lucide-react';
+import { History, LogOut, Plus, BarChart3, Wallet, Settings, User } from 'lucide-react';
 import ExpenseForm from './components/ExpenseForm';
 import Dashboard from './components/Dashboard';
 import AdminPanel from './components/AdminPanel';
 import EntitiesManager from './components/EntitiesManager';
+import ExpenseHistory from './components/ExpenseHistory';
 
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'renzodogliotti@gmail.com';
 
@@ -108,6 +109,7 @@ function App() {
       <main className="flex-1 overflow-y-auto px-6 pb-32">
         {vistaActiva === 'form' && <ExpenseForm user={user} />}
         {vistaActiva === 'dashboard' && <Dashboard user={user} />}
+        {vistaActiva === 'history' && <ExpenseHistory user={user} />}
         {vistaActiva === 'profile' && <EntitiesManager user={user} />}
         {vistaActiva === 'admin' && isAdmin && <AdminPanel />}
       </main>
@@ -132,6 +134,15 @@ function App() {
             className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'dashboard' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
           >
             <BarChart3 size={24} strokeWidth={vistaActiva === 'dashboard' ? 2.5 : 2} />
+          </button>
+
+          <div className="w-px h-8 bg-zinc-700"></div>
+
+          <button 
+            onClick={() => setVistaActiva('history')}
+            className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'history' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
+          >
+            <History size={24} strokeWidth={vistaActiva === 'history' ? 2.5 : 2} />
           </button>
 
           <div className="w-px h-8 bg-zinc-700"></div>

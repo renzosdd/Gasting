@@ -31,6 +31,11 @@ const mesDeGasto = (gasto) => {
   return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}`;
 };
 
+const currentMonth = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+};
+
 const agrupar = (gastos, getKey) => {
   const mapa = new Map();
   gastos.forEach((gasto) => {
@@ -44,6 +49,7 @@ const agrupar = (gastos, getKey) => {
 
 export default function Dashboard({ user }) {
   const [vista, setVista] = useState('categoria');
+  const [mes, setMes] = useState(currentMonth());
   const [gastos, setGastos] = useState([]);
 
   useEffect(() => {
@@ -54,26 +60,30 @@ export default function Dashboard({ user }) {
     return () => unsubscribe();
   }, [user.uid]);
 
-  const total = useMemo(() => gastos.reduce((sum, gasto) => sum + Number(gasto.monto || 0), 0), [gastos]);
+  const gastosFiltrados = useMemo(() => (
+    gastos.filter(gasto => !mes || mesDeGasto(gasto) === mes)
+  ), [gastos, mes]);
+
+  const total = useMemo(() => gastosFiltrados.reduce((sum, gasto) => sum + Number(gasto.monto || 0), 0), [gastosFiltrados]);
 
   const data = useMemo(() => {
-    if (vista === 'categoria') return agrupar(gastos, gasto => gasto.categoriaGrupo || gasto.categoria);
-    if (vista === 'subcategoria') return agrupar(gastos, gasto => gasto.subcategoria || gasto.categoria);
-    if (vista === 'destino') return agrupar(gastos, gasto => gasto.tipoDestino || 'general');
-    if (vista === 'vehiculos') return agrupar(gastos.filter(g => (g.tipoDestino || '') === 'vehiculo'), gasto => gasto.vehiculoNombre || 'Auto sin asociar');
-    if (vista === 'hogares') return agrupar(gastos.filter(g => (g.tipoDestino || '') === 'hogar'), gasto => gasto.hogarNombre || 'Casa sin asociar');
+    if (vista === 'categoria') return agrupar(gastosFiltrados, gasto => gasto.categoriaGrupo || gasto.categoria);
+    if (vista === 'subcategoria') return agrupar(gastosFiltrados, gasto => gasto.subcategoria || gasto.categoria);
+    if (vista === 'destino') return agrupar(gastosFiltrados, gasto => gasto.tipoDestino || 'general');
+    if (vista === 'vehiculos') return agrupar(gastosFiltrados.filter(g => (g.tipoDestino || '') === 'vehiculo'), gasto => gasto.vehiculoNombre || 'Auto sin asociar');
+    if (vista === 'hogares') return agrupar(gastosFiltrados.filter(g => (g.tipoDestino || '') === 'hogar'), gasto => gasto.hogarNombre || 'Casa sin asociar');
     if (vista === 'mensual') return agrupar(gastos, mesDeGasto).sort((a, b) => a.name.localeCompare(b.name));
-    if (vista === 'fijos') return agrupar(gastos, gasto => gasto.gastoFijo ? 'Fijos' : 'Variables');
-    if (vista === 'tarjetas') return agrupar(gastos.filter(g => (g.tipoDestino || '') === 'tarjeta'), gasto => gasto.estadoCuenta ? 'Con estado' : 'Pendiente PDF');
+    if (vista === 'fijos') return agrupar(gastosFiltrados, gasto => gasto.gastoFijo ? 'Fijos' : 'Variables');
+    if (vista === 'tarjetas') return agrupar(gastosFiltrados.filter(g => (g.tipoDestino || '') === 'tarjeta'), gasto => gasto.tarjetaNombre || 'Tarjeta sin asociar');
     return [];
-  }, [gastos, vista]);
+  }, [gastos, gastosFiltrados, vista]);
 
   const vencimientos = useMemo(() => (
-    gastos
+    gastosFiltrados
       .filter(gasto => gasto.detalles?.vencimiento)
       .sort((a, b) => a.detalles.vencimiento.localeCompare(b.detalles.vencimiento))
       .slice(0, 8)
-  ), [gastos]);
+  ), [gastosFiltrados]);
 
   const topTres = data.slice(0, 3);
 
@@ -81,7 +91,16 @@ export default function Dashboard({ user }) {
     <div className="pt-4 animate-in fade-in duration-500 space-y-5">
       <div>
         <h2 className="text-2xl font-extrabold text-zinc-800">Reportes</h2>
-        <p className="text-sm text-zinc-500 font-medium">Todas las lecturas principales de tu economía.</p>
+      </div>
+
+      <div className="bg-white p-3 rounded-2xl border border-zinc-100 shadow-sm flex items-center justify-between gap-3">
+        <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">Mes</span>
+        <input
+          type="month"
+          value={mes}
+          onChange={(e) => setMes(e.target.value)}
+          className="p-2 rounded-xl bg-zinc-50 border border-zinc-200 font-bold text-zinc-700 outline-none"
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -91,7 +110,7 @@ export default function Dashboard({ user }) {
         </div>
         <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm">
           <p className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Gastos</p>
-          <p className="text-2xl font-black text-zinc-800">{gastos.length}</p>
+          <p className="text-2xl font-black text-zinc-800">{gastosFiltrados.length}</p>
         </div>
       </div>
 

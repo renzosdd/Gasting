@@ -16,6 +16,7 @@ export default function AdminPanel() {
   const [categorias, setCategorias] = useState([]);
   const [ubicaciones, setUbicaciones] = useState([]);
   const [admins, setAdmins] = useState([]);
+  const [sugerencias, setSugerencias] = useState([]);
   const [categoriaNombre, setCategoriaNombre] = useState('');
   const [categoriaTipo, setCategoriaTipo] = useState('general');
   const [subcategoriaPorCategoria, setSubcategoriaPorCategoria] = useState({});
@@ -32,7 +33,10 @@ export default function AdminPanel() {
     const unsubAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
       setAdmins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-    return () => { unsubCat(); unsubUbi(); unsubAdmins(); };
+    const unsubSugerencias = onSnapshot(collection(db, 'subcategoria_sugerencias'), (snapshot) => {
+      setSugerencias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => { unsubCat(); unsubUbi(); unsubAdmins(); unsubSugerencias(); };
   }, []);
 
   const categoriasOrdenadas = useMemo(() => (
@@ -77,6 +81,21 @@ export default function AdminPanel() {
     const subcategorias = Array.isArray(categoria.subcategorias) ? categoria.subcategorias : [];
     const nuevas = subcategorias.filter(sub => (typeof sub === 'string' ? sub : sub.nombre) !== subcategoriaNombre);
     await updateDoc(doc(db, 'categorias', categoria.id), { subcategorias: nuevas });
+  };
+
+  const aprobarSugerencia = async (sugerencia) => {
+    const categoria = categorias.find(cat => cat.id === sugerencia.categoriaId);
+    if (!categoria) return;
+
+    const subcategorias = Array.isArray(categoria.subcategorias) ? categoria.subcategorias : [];
+    const existe = subcategorias.some(sub => (typeof sub === 'string' ? sub : sub.nombre) === sugerencia.nombre);
+
+    if (!existe) {
+      await updateDoc(doc(db, 'categorias', categoria.id), {
+        subcategorias: [...subcategorias, { nombre: sugerencia.nombre, fija: false }],
+      });
+    }
+    await updateDoc(doc(db, 'subcategoria_sugerencias', sugerencia.id), { estado: 'aprobada' });
   };
 
   const handleAddUbicacion = async () => {
@@ -173,6 +192,25 @@ export default function AdminPanel() {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
+        <h2 className="text-xl font-bold text-zinc-800 mb-4">Sugerencias</h2>
+        <div className="space-y-2">
+          {sugerencias.filter(s => s.estado === 'pendiente').length === 0 && (
+            <p className="text-sm text-zinc-400 text-center py-6">No hay sugerencias pendientes.</p>
+          )}
+          {sugerencias.filter(s => s.estado === 'pendiente').map(sugerencia => (
+            <div key={sugerencia.id} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+              <p className="font-bold text-zinc-800">{sugerencia.nombre}</p>
+              <p className="text-xs text-zinc-500 mb-3">{sugerencia.categoriaNombre} · {sugerencia.tipoDestino}</p>
+              <div className="flex gap-2">
+                <button onClick={() => aprobarSugerencia(sugerencia)} className="flex-1 p-3 rounded-xl bg-emerald-500 text-white font-bold text-sm">Aprobar</button>
+                <button onClick={() => updateDoc(doc(db, 'subcategoria_sugerencias', sugerencia.id), { estado: 'rechazada' })} className="flex-1 p-3 rounded-xl bg-zinc-200 text-zinc-600 font-bold text-sm">Rechazar</button>
               </div>
             </div>
           ))}

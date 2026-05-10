@@ -56,6 +56,12 @@ service cloud.firestore {
       allow update: if ownsResourceUserField() && ownsUserField();
     }
 
+    match /subcategoria_sugerencias/{sugerenciaId} {
+      allow create: if ownsUserField();
+      allow read: if isAdmin() || ownsResourceUserField();
+      allow update, delete: if isAdmin();
+    }
+
     match /vehiculos/{vehiculoId} {
       allow create: if ownsNewEntity();
       allow read, delete: if ownsExistingEntity();
@@ -63,6 +69,12 @@ service cloud.firestore {
     }
 
     match /hogares/{hogarId} {
+      allow create: if ownsNewEntity();
+      allow read, delete: if ownsExistingEntity();
+      allow update: if ownsExistingEntity() && ownsNewEntity();
+    }
+
+    match /tarjetas/{tarjetaId} {
       allow create: if ownsNewEntity();
       allow read, delete: if ownsExistingEntity();
       allow update: if ownsExistingEntity() && ownsNewEntity();
