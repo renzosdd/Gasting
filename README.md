@@ -6,8 +6,9 @@ App móvil para registrar gastos personales y asociarlos a categorías, ubicacio
 
 1. Copiá `.env.example` a `.env.local`.
 2. Completá las variables `VITE_FIREBASE_*` con los datos de tu proyecto Firebase.
-3. Creá un documento `admins/{uid}` en Firestore para cada usuario administrador.
-4. Desplegá reglas con Firebase CLI cuando estén listas:
+3. En Netlify, configurá `OPENAI_API_KEY` y opcionalmente `OPENAI_MODEL`.
+4. Creá un documento `admins/{uid}` en Firestore para cada usuario administrador.
+5. Desplegá reglas con Firebase CLI cuando estén listas:
 
 ```bash
 firebase deploy --only firestore:rules,storage
@@ -27,6 +28,10 @@ firebase deploy --only firestore:rules,storage
 ## Tarjetas de crédito
 
 Los gastos de tarjeta pueden asociarse a una tarjeta registrada. Como Firebase Storage puede tener costo, por ahora el PDF no se sube: se guarda el nombre del archivo y el estado queda pendiente para una futura etapa de almacenamiento/análisis.
+
+## Análisis de documentos
+
+La app incluye una función de Netlify en `netlify/functions/analyze-document.js`. Recibe un PDF o imagen desde el formulario, usa un modelo liviano de OpenAI configurado por `OPENAI_MODEL` y devuelve gastos sugeridos para que el usuario confirme antes de guardarlos.
 
 ## Reportes
 

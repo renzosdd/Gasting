@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
 import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
-import { CarFront, CreditCard, FileText, Home, Mic, Plus, Wallet, X } from 'lucide-react';
+import { CarFront, CreditCard, FileText, Home, Mic, Plus, Sparkles, Wallet, X } from 'lucide-react';
 
 const TIPOS_DESTINO = [
   { id: 'general', label: 'General', icon: Wallet },
@@ -15,6 +15,13 @@ const normalizar = (valor = '') => valor.toLowerCase().normalize('NFD').replace(
 const getSubcategoriaNombre = (subcategoria) => (
   typeof subcategoria === 'string' ? subcategoria : subcategoria?.nombre || ''
 );
+
+const fileToBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result).split(',')[1]);
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+});
 
 const campoExtra = (subcategoria, tipoDestino) => {
   const nombre = normalizar(subcategoria);
@@ -51,6 +58,8 @@ export default function ExpenseForm({ user }) {
   const [showCategoriaInput, setShowCategoriaInput] = useState(false);
   const [showSubcategoriaInput, setShowSubcategoriaInput] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState('');
+  const [documentStatus, setDocumentStatus] = useState('');
+  const [documentSuggestions, setDocumentSuggestions] = useState([]);
   const [detalles, setDetalles] = useState({});
   const [loading, setLoading] = useState(false);
 
@@ -209,6 +218,82 @@ export default function ExpenseForm({ user }) {
     };
     recognition.onend = () => setTimeout(() => setVoiceStatus(''), 5000);
     recognition.start();
+  };
+
+  const analizarDocumento = async () => {
+    if (!estadoCuentaFile) {
+      setDocumentStatus('Elegí un PDF o imagen para analizar.');
+      return;
+    }
+
+    setDocumentStatus('Analizando documento...');
+    setDocumentSuggestions([]);
+
+    try {
+      const fileData = await fileToBase64(estadoCuentaFile);
+      const response = await fetch('/.netlify/functions/analyze-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: estadoCuentaFile.name,
+          mimeType: estadoCuentaFile.type || 'application/octet-stream',
+          fileData,
+          categorias: categoriasDisponibles.map(categoria => ({
+            nombre: categoria.nombre,
+            tipoDestino: categoria.tipoDestino || 'general',
+            subcategorias: (categoria.subcategorias || []).map(getSubcategoriaNombre),
+          })),
+          tarjetas: tarjetas.map(tarjeta => ({
+            nombre: tarjeta.nombre,
+            banco: tarjeta.banco,
+            marca: tarjeta.marca,
+            ultimos4: tarjeta.ultimos4,
+          })),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'No se pudo analizar el documento.');
+      }
+
+      setDocumentSuggestions(data.gastos || []);
+      setDocumentStatus(data.resumen || 'Documento analizado.');
+    } catch (error) {
+      console.error('Error al analizar documento:', error);
+      setDocumentStatus(error.message || 'No se pudo analizar el documento.');
+    }
+  };
+
+  const guardarSugerencia = async (sugerencia) => {
+    const categoria = categoriasDisponibles.find(cat => normalizar(cat.nombre) === normalizar(sugerencia.categoriaGrupo));
+    const categoriaNombre = categoria?.nombre || sugerencia.categoriaGrupo || 'Sin categoría';
+
+    await addDoc(collection(db, 'gastos'), {
+      userId: user.uid,
+      monto: Number(sugerencia.monto || 0),
+      moneda: sugerencia.moneda || 'UYU',
+      tipoDestino: sugerencia.tipoDestino || 'general',
+      categoriaId: categoria?.id || null,
+      categoriaGrupo: categoriaNombre,
+      categoria: sugerencia.subcategoria || categoriaNombre,
+      subcategoria: sugerencia.subcategoria || null,
+      detalles: {
+        descripcion: sugerencia.descripcion || '',
+        notas: sugerencia.notas || '',
+        confianza: sugerencia.confianza || 0,
+        fuente: 'documento_ia',
+      },
+      estadoCuenta: {
+        nombre: estadoCuentaFile?.name || '',
+        estado: 'analizado_sin_storage',
+      },
+      origen: 'documento_ia',
+      fecha: serverTimestamp(),
+    });
+
+    setDocumentSuggestions((actual) => actual.filter(item => item !== sugerencia));
   };
 
   const handleSubmit = async (e) => {
@@ -456,8 +541,41 @@ export default function ExpenseForm({ user }) {
                 />
                 <p className="mt-2 text-xs text-indigo-700">No se sube a Firebase Storage. Queda registrado el nombre para cargarlo cuando definamos almacenamiento.</p>
                 {estadoCuentaFile && <p className="mt-2 text-xs font-medium text-indigo-700">{estadoCuentaFile.name}</p>}
+                <button
+                  type="button"
+                  onClick={analizarDocumento}
+                  className="mt-3 w-full p-3 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center gap-2"
+                >
+                  <Sparkles size={18} /> Analizar con IA
+                </button>
+                {documentStatus && <p className="mt-2 text-xs font-medium text-indigo-700">{documentStatus}</p>}
                 </div>
               </div>
+            </div>
+          )}
+
+          {documentSuggestions.length > 0 && (
+            <div className="space-y-3 bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
+              <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Sugerencias del documento</p>
+              {documentSuggestions.map((sugerencia, index) => (
+                <div key={`${sugerencia.descripcion}-${index}`} className="p-3 bg-white rounded-xl border border-zinc-100">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-bold text-zinc-800">{sugerencia.descripcion}</p>
+                      <p className="text-xs text-zinc-500">{sugerencia.categoriaGrupo} · {sugerencia.subcategoria} · {sugerencia.tipoDestino}</p>
+                      {sugerencia.notas && <p className="text-xs text-zinc-400 mt-1">{sugerencia.notas}</p>}
+                    </div>
+                    <p className="font-black text-zinc-900 whitespace-nowrap">{sugerencia.moneda === 'USD' ? 'US$' : '$'}{Number(sugerencia.monto || 0).toFixed(2)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => guardarSugerencia(sugerencia)}
+                    className="mt-3 w-full p-3 rounded-xl bg-emerald-500 text-white font-bold"
+                  >
+                    Guardar este gasto
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
