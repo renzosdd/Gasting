@@ -38,6 +38,7 @@ const campoExtra = (subcategoria, tipoDestino) => {
 
 export default function ExpenseForm({ user }) {
   const [monto, setMonto] = useState('');
+  const [moneda, setMoneda] = useState('UYU');
   const [tipoDestino, setTipoDestino] = useState('general');
   const [categoriaId, setCategoriaId] = useState('');
   const [subcategoria, setSubcategoria] = useState('');
@@ -170,6 +171,8 @@ export default function ExpenseForm({ user }) {
     const limpio = normalizar(texto);
     const montoMatch = limpio.match(/(\d+(?:[.,]\d+)?)/);
     if (montoMatch) setMonto(montoMatch[1].replace(',', '.'));
+    if (limpio.includes('dolar') || limpio.includes('dolares') || limpio.includes('usd')) setMoneda('USD');
+    if (limpio.includes('peso') || limpio.includes('pesos') || limpio.includes('uruguay')) setMoneda('UYU');
 
     if (limpio.includes('auto') || limpio.includes('vehiculo') || limpio.includes('nafta') || limpio.includes('combustible')) setTipoDestino('vehiculo');
     else if (limpio.includes('casa') || limpio.includes('hogar') || limpio.includes('ute') || limpio.includes('ose')) setTipoDestino('hogar');
@@ -233,6 +236,7 @@ export default function ExpenseForm({ user }) {
       batch.set(gastoRef, {
         userId: user.uid,
         monto: montoNumerico,
+        moneda,
         tipoDestino,
         categoriaId: categoriaId || null,
         categoriaGrupo: getCategoriaNombre(),
@@ -258,6 +262,7 @@ export default function ExpenseForm({ user }) {
       await batch.commit();
 
       setMonto('');
+      setMoneda('UYU');
       setEstadoCuentaFile(null);
       setSubcategoriaSugerida('');
       setCategoriaSugerida('');
@@ -276,7 +281,7 @@ export default function ExpenseForm({ user }) {
         <div className="flex flex-col items-center justify-center py-8">
           <span className="text-zinc-400 font-medium mb-2">¿Cuánto gastaste?</span>
           <div className="flex items-center justify-center text-emerald-500">
-            <span className="text-4xl font-bold mr-1">$</span>
+            <span className="text-4xl font-bold mr-1">{moneda === 'USD' ? 'US$' : '$'}</span>
             <input
               type="number"
               value={monto}
@@ -286,6 +291,18 @@ export default function ExpenseForm({ user }) {
               inputMode="decimal"
               autoFocus
             />
+          </div>
+          <div className="mt-4 flex bg-zinc-200/60 p-1 rounded-full">
+            {['UYU', 'USD'].map(item => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setMoneda(item)}
+                className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${moneda === item ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}
+              >
+                {item === 'UYU' ? 'Pesos' : 'Dólares'}
+              </button>
+            ))}
           </div>
           <button
             type="button"

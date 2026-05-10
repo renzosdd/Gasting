@@ -23,7 +23,7 @@ export default function ExpenseHistory({ user }) {
   const [gastos, setGastos] = useState([]);
   const [mes, setMes] = useState(currentMonth());
   const [editando, setEditando] = useState(null);
-  const [form, setForm] = useState({ monto: '', tipoDestino: 'general', categoria: '', subcategoria: '' });
+  const [form, setForm] = useState({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoria: '', subcategoria: '' });
 
   useEffect(() => {
     const q = query(collection(db, 'gastos'), where('userId', '==', user.uid));
@@ -43,6 +43,7 @@ export default function ExpenseHistory({ user }) {
     setEditando(gasto.id);
     setForm({
       monto: gasto.monto || '',
+      moneda: gasto.moneda || 'UYU',
       tipoDestino: gasto.tipoDestino || 'general',
       categoria: gasto.categoriaGrupo || '',
       subcategoria: gasto.subcategoria || gasto.categoria || '',
@@ -51,12 +52,13 @@ export default function ExpenseHistory({ user }) {
 
   const cancelar = () => {
     setEditando(null);
-    setForm({ monto: '', tipoDestino: 'general', categoria: '', subcategoria: '' });
+    setForm({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoria: '', subcategoria: '' });
   };
 
   const guardar = async (gasto) => {
     await updateDoc(doc(db, 'gastos', gasto.id), {
       monto: Number(form.monto),
+      moneda: form.moneda,
       tipoDestino: form.tipoDestino,
       categoriaGrupo: form.categoria,
       categoria: form.subcategoria || form.categoria,
@@ -98,6 +100,10 @@ export default function ExpenseHistory({ user }) {
             {editando === gasto.id ? (
               <div className="space-y-3">
                 <input type="number" value={form.monto} onChange={e => setForm({ ...form, monto: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold" />
+                <select value={form.moneda} onChange={e => setForm({ ...form, moneda: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
+                  <option value="UYU">Pesos</option>
+                  <option value="USD">Dólares</option>
+                </select>
                 <select value={form.tipoDestino} onChange={e => setForm({ ...form, tipoDestino: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
                   <option value="general">General</option>
                   <option value="vehiculo">Vehículo</option>
@@ -117,7 +123,7 @@ export default function ExpenseHistory({ user }) {
               <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="font-black text-lg text-zinc-900">${Number(gasto.monto || 0).toFixed(2)}</p>
+                    <p className="font-black text-lg text-zinc-900">{gasto.moneda === 'USD' ? 'US$' : '$'}{Number(gasto.monto || 0).toFixed(2)}</p>
                     <p className="text-xs font-bold text-zinc-400">{formatDate(gasto.fecha)}</p>
                   </div>
                   <p className="font-bold text-zinc-700 truncate">{gasto.subcategoria || gasto.categoria}</p>

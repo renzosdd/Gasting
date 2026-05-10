@@ -48,6 +48,7 @@ export default function EntitiesManager({ user }) {
   const [fotoVehiculoFile, setFotoVehiculoFile] = useState(null);
   const [fotoHogarFile, setFotoHogarFile] = useState(null);
   const [servicioForm, setServicioForm] = useState(EMPTY_SERVICIO);
+  const [showServicioForm, setShowServicioForm] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -76,6 +77,7 @@ export default function EntitiesManager({ user }) {
     setFotoVehiculoFile(null);
     setFotoHogarFile(null);
     setServicioForm(EMPTY_SERVICIO);
+    setShowServicioForm(false);
   };
 
   const cambiarTab = (nuevoTab) => {
@@ -117,8 +119,13 @@ export default function EntitiesManager({ user }) {
     if (!file) return null;
     const compressed = await compressImage(file);
     const imageRef = ref(storage, `${folder}/${user.uid}/${Date.now()}_${compressed.name}`);
-    const snapshot = await uploadBytes(imageRef, compressed);
-    return getDownloadURL(snapshot.ref);
+    try {
+      const snapshot = await uploadBytes(imageRef, compressed);
+      return getDownloadURL(snapshot.ref);
+    } catch (error) {
+      console.error('No se pudo subir la imagen comprimida:', error);
+      return null;
+    }
   };
 
   const agregarServicio = () => {
@@ -128,6 +135,7 @@ export default function EntitiesManager({ user }) {
       servicios: [...(actual.servicios || []), { ...servicioForm, diaPago: Number(servicioForm.diaPago) || '' }],
     }));
     setServicioForm(EMPTY_SERVICIO);
+    setShowServicioForm(false);
   };
 
   const quitarServicio = (index) => {
@@ -326,13 +334,25 @@ export default function EntitiesManager({ user }) {
                     <button type="button" onClick={() => quitarServicio(index)} className="p-2 text-red-500"><Trash2 size={16} /></button>
                   </div>
                 ))}
-                <div className="grid grid-cols-2 gap-2">
-                  <input value={servicioForm.nombre} onChange={e => setServicioForm({ ...servicioForm, nombre: e.target.value })} placeholder="Servicio (UTE)" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
-                  <input value={servicioForm.proveedor} onChange={e => setServicioForm({ ...servicioForm, proveedor: e.target.value })} placeholder="Proveedor" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
-                  <input value={servicioForm.numeroCuenta} onChange={e => setServicioForm({ ...servicioForm, numeroCuenta: e.target.value })} placeholder="Nro. cuenta" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
-                  <input type="number" min="1" max="31" value={servicioForm.diaPago} onChange={e => setServicioForm({ ...servicioForm, diaPago: e.target.value })} placeholder="Día pago" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
-                </div>
-                <button type="button" onClick={agregarServicio} className="w-full p-3 rounded-xl bg-blue-600 text-white font-bold">Agregar servicio</button>
+                {!showServicioForm && (
+                  <button type="button" onClick={() => setShowServicioForm(true)} className="w-full p-3 rounded-xl bg-white border border-blue-200 text-blue-700 font-bold flex items-center justify-center gap-2">
+                    <Plus size={18} /> Agregar servicio
+                  </button>
+                )}
+                {showServicioForm && (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <input value={servicioForm.nombre} onChange={e => setServicioForm({ ...servicioForm, nombre: e.target.value })} placeholder="Servicio (UTE)" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
+                      <input value={servicioForm.proveedor} onChange={e => setServicioForm({ ...servicioForm, proveedor: e.target.value })} placeholder="Proveedor" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
+                      <input value={servicioForm.numeroCuenta} onChange={e => setServicioForm({ ...servicioForm, numeroCuenta: e.target.value })} placeholder="Nro. cuenta" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
+                      <input type="number" min="1" max="31" value={servicioForm.diaPago} onChange={e => setServicioForm({ ...servicioForm, diaPago: e.target.value })} placeholder="Día pago" className="p-3 bg-white border border-blue-100 rounded-xl outline-none" />
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={agregarServicio} className="flex-1 p-3 rounded-xl bg-blue-600 text-white font-bold">Guardar servicio</button>
+                      <button type="button" onClick={() => setShowServicioForm(false)} className="px-4 rounded-xl bg-white border border-blue-100 text-zinc-500 font-bold">Cancelar</button>
+                    </div>
+                  </div>
+                )}
               </div>
               <button type="submit" disabled={loading} className="w-full p-4 rounded-2xl font-bold text-white bg-blue-600 disabled:opacity-50">{loading ? 'Guardando...' : 'Guardar'}</button>
             </form>
