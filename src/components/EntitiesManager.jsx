@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import { db, storage } from '../firebase';
 import { collection, addDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { CarFront, Home, Plus, Image as ImageIcon } from 'lucide-react';
+import { CarFront, Home, Plus, Image as ImageIcon, MapPin } from 'lucide-react';
 
 export default function EntitiesManager({ user }) {
   const [tab, setTab] = useState('vehiculos'); // 'vehiculos' o 'hogares'
   const [vehiculos, setVehiculos] = useState([]);
+  const [hogares, setHogares] = useState([]);
   const [creando, setCreando] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -19,6 +20,8 @@ export default function EntitiesManager({ user }) {
   const [kmActual, setKmActual] = useState('');
   const [fotoFile, setFotoFile] = useState(null);
   const [fotoPreview, setFotoPreview] = useState(null);
+  const [nombreHogar, setNombreHogar] = useState('');
+  const [direccionHogar, setDireccionHogar] = useState('');
 
   useEffect(() => {
     // Escuchar los vehículos del usuario (donde su uid esté en el array 'propietarios')
@@ -28,6 +31,21 @@ export default function EntitiesManager({ user }) {
     });
     return () => unsubscribe();
   }, [user.uid]);
+
+  useEffect(() => {
+    const q = query(collection(db, 'hogares'), where('propietarios', 'array-contains', user.uid));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setHogares(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => unsubscribe();
+  }, [user.uid]);
+
+  const resetCreacion = () => {
+    setNombre(''); setMarca(''); setModelo(''); setAnio('');
+    setKmActual(''); setFotoFile(null); setFotoPreview(null);
+    setNombreHogar(''); setDireccionHogar('');
+    setCreando(false);
+  };
 
   const handleFotoChange = (e) => {
     if (e.target.files[0]) {
@@ -64,14 +82,35 @@ export default function EntitiesManager({ user }) {
       });
 
       // Limpiar form
-      setNombre(''); setMarca(''); setModelo(''); setAnio('');
-      setKmActual(''); setFotoFile(null); setFotoPreview(null);
-      setCreando(false);
+      resetCreacion();
     } catch (error) {
       console.error("Error al crear vehículo:", error);
       alert("Error: " + error.message);
     }
     setLoading(false);
+  };
+
+  const handleGuardarHogar = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      await addDoc(collection(db, 'hogares'), {
+        propietarios: [user.uid],
+        nombre: nombreHogar,
+        direccion: direccionHogar,
+      });
+      resetCreacion();
+    } catch (error) {
+      console.error("Error al crear hogar:", error);
+      alert("Error: " + error.message);
+    }
+    setLoading(false);
+  };
+
+  const cambiarTab = (nuevoTab) => {
+    setTab(nuevoTab);
+    resetCreacion();
   };
 
   return (
@@ -81,13 +120,13 @@ export default function EntitiesManager({ user }) {
       {/* Tabs Selector */}
       <div className="flex bg-zinc-200/50 p-1 rounded-2xl mb-6">
         <button 
-          onClick={() => setTab('vehiculos')}
+          onClick={() => cambiarTab('vehiculos')}
           className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'vehiculos' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}
         >
           <CarFront size={18} /> Vehículos
         </button>
         <button 
-          onClick={() => setTab('hogares')}
+          onClick={() => cambiarTab('hogares')}
           className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'hogares' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}
         >
           <Home size={18} /> Hogares
@@ -111,10 +150,12 @@ export default function EntitiesManager({ user }) {
               </div>
               <div className="flex-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-emerald-500">{vehiculo.tipo_motor}</span>
-                <h3 className="text-lg font-bold text-zinc-800 leading-tight">{vehiculo.nombre}</h3>
-                <p className="text-sm text-zinc-500 mb-2">{vehiculo.marca} {vehiculo.modelo} ({vehiculo.anio})</p>
+                <h3 className="text-lg font-bold text-zinc-800 leading-tight">{vehiculo.nombre || 'Vehículo sin nombre'}</h3>
+                <p className="text-sm text-zinc-500 mb-2">{vehiculo.marca || 'Marca'} {vehiculo.modelo || 'Modelo'} {vehiculo.anio ? `(${vehiculo.anio})` : ''}</p>
                 <div className="inline-block bg-zinc-100 px-3 py-1 rounded-lg">
-                  <span className="text-xs font-bold text-zinc-600">{vehiculo.kilometraje_actual.toLocaleString()} KM</span>
+                  <span className="text-xs font-bold text-zinc-600">
+                    {typeof vehiculo.kilometraje_actual === 'number' ? `${vehiculo.kilometraje_actual.toLocaleString()} KM` : 'Sin km'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -188,7 +229,7 @@ export default function EntitiesManager({ user }) {
               </div>
 
               <div className="flex gap-2 pt-4">
-                <button type="button" onClick={() => setCreando(false)} className="flex-1 p-4 rounded-2xl font-bold text-zinc-500 bg-zinc-100 hover:bg-zinc-200">Cancelar</button>
+                <button type="button" onClick={resetCreacion} className="flex-1 p-4 rounded-2xl font-bold text-zinc-500 bg-zinc-100 hover:bg-zinc-200">Cancelar</button>
                 <button type="submit" disabled={loading} className="flex-1 p-4 rounded-2xl font-bold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50">
                   {loading ? 'Guardando...' : 'Guardar'}
                 </button>
@@ -199,9 +240,52 @@ export default function EntitiesManager({ user }) {
       )}
 
       {tab === 'hogares' && (
-        <div className="text-center py-10">
-          <Home className="mx-auto text-zinc-300 mb-4" size={48} />
-          <p className="text-zinc-500 font-medium">Gestor de hogares próximamente...</p>
+        <div className="space-y-6">
+          {!creando && hogares.map(hogar => (
+            <div key={hogar.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-100 flex gap-4 items-center">
+              <div className="w-16 h-16 rounded-2xl bg-blue-50 flex-shrink-0 flex items-center justify-center text-blue-600 border border-blue-100">
+                <Home size={28} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-zinc-800 leading-tight">{hogar.nombre || 'Hogar sin nombre'}</h3>
+                <p className="text-sm text-zinc-500 flex items-center gap-1">
+                  <MapPin size={14} /> {hogar.direccion || 'Sin dirección'}
+                </p>
+              </div>
+            </div>
+          ))}
+
+          {!creando && (
+            <button 
+              onClick={() => setCreando(true)}
+              className="w-full bg-blue-50 border border-blue-200 text-blue-700 font-bold py-4 rounded-3xl flex items-center justify-center gap-2 hover:bg-blue-100 transition-all"
+            >
+              <Plus size={20} /> Registrar Nuevo Hogar
+            </button>
+          )}
+
+          {creando && (
+            <form onSubmit={handleGuardarHogar} className="bg-white p-6 rounded-3xl shadow-sm border border-zinc-100 space-y-4">
+              <h3 className="font-bold text-zinc-800 text-lg mb-4">Nuevo Hogar</h3>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1 ml-1">Nombre</label>
+                <input type="text" value={nombreHogar} onChange={e => setNombreHogar(e.target.value)} placeholder="Ej: Casa centro" required className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1 ml-1">Dirección</label>
+                <input type="text" value={direccionHogar} onChange={e => setDireccionHogar(e.target.value)} placeholder="Opcional" className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+
+              <div className="flex gap-2 pt-4">
+                <button type="button" onClick={resetCreacion} className="flex-1 p-4 rounded-2xl font-bold text-zinc-500 bg-zinc-100 hover:bg-zinc-200">Cancelar</button>
+                <button type="submit" disabled={loading} className="flex-1 p-4 rounded-2xl font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                  {loading ? 'Guardando...' : 'Guardar'}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       )}
     </div>

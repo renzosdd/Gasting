@@ -1,25 +1,43 @@
 import { useState, useEffect } from 'react';
-import { auth, loginConGoogle, logout } from './firebase';
+import { auth, db, loginConGoogle, logout } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { LogOut, Plus, BarChart3, Wallet, Settings, User } from 'lucide-react';
 import ExpenseForm from './components/ExpenseForm';
 import Dashboard from './components/Dashboard';
 import AdminPanel from './components/AdminPanel';
 import EntitiesManager from './components/EntitiesManager';
 
-// HARDCODEA TU EMAIL DE ADMIN AQUÍ
-const ADMIN_EMAIL = 'renzodogliotti@gmail.com'; 
+const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
 
 function App() {
   const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [vistaActiva, setVistaActiva] = useState('form');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
+      setIsAdmin(false);
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const cargarAdmin = async () => {
+      try {
+        const adminDoc = await getDoc(doc(db, 'admins', user.uid));
+        setIsAdmin(adminDoc.exists() || user.email === ADMIN_EMAIL);
+      } catch (error) {
+        console.error('No se pudo cargar el rol admin:', error);
+        setIsAdmin(user.email === ADMIN_EMAIL);
+      }
+    };
+
+    cargarAdmin();
+  }, [user]);
 
   if (!user) {
     return (
@@ -41,18 +59,22 @@ function App() {
     );
   }
 
-  const isAdmin = user.email === ADMIN_EMAIL;
-
   return (
     <div className="max-w-md mx-auto h-[100dvh] flex flex-col bg-zinc-50 relative">
       {/* Header Minimalista */}
       <header className="px-6 pt-10 pb-4 flex justify-between items-center z-10 bg-zinc-50/80 backdrop-blur-md sticky top-0">
         <div className="flex items-center gap-3">
-          <img src={user.photoURL} alt="perfil" className="w-10 h-10 rounded-full shadow-sm" />
+          {user.photoURL ? (
+            <img src={user.photoURL} alt="perfil" className="w-10 h-10 rounded-full shadow-sm" />
+          ) : (
+            <div className="w-10 h-10 rounded-full shadow-sm bg-zinc-200 flex items-center justify-center text-zinc-500">
+              <User size={18} />
+            </div>
+          )}
           <div>
             <p className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Hola,</p>
             <h2 className="font-bold text-zinc-800 leading-tight">
-              {user.displayName.split(' ')[0]}
+              {(user.displayName || user.email || 'Usuario').split(' ')[0]}
             </h2>
           </div>
         </div>
@@ -66,7 +88,7 @@ function App() {
         {vistaActiva === 'form' && <ExpenseForm user={user} />}
         {vistaActiva === 'dashboard' && <Dashboard user={user} />}
         {vistaActiva === 'profile' && <EntitiesManager user={user} />}
-        {vistaActiva === 'admin' && <AdminPanel />}
+        {vistaActiva === 'admin' && isAdmin && <AdminPanel />}
       </main>
 
       {/* Navegación Inferior Flotante */}

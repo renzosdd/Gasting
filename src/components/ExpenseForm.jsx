@@ -1,56 +1,122 @@
 import { useState, useEffect } from 'react';
-import { db } from '../firebase';
-import { collection, addDoc, doc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { db, storage } from '../firebase';
+import { collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { CarFront, FileText, Home } from 'lucide-react';
+
+const normalizar = (valor) => valor.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 export default function ExpenseForm({ user }) {
   const [monto, setMonto] = useState('');
   const [categoria, setCategoria] = useState('');
   const [ubicacion, setUbicacion] = useState('');
   const [kilometraje, setKilometraje] = useState('');
+  const [vehiculoId, setVehiculoId] = useState('');
+  const [hogarId, setHogarId] = useState('');
+  const [estadoCuentaFile, setEstadoCuentaFile] = useState(null);
   const [loading, setLoading] = useState(false);
 
   // Estados para las listas dinámicas
   const [categorias, setCategorias] = useState([]);
   const [ubicaciones, setUbicaciones] = useState([]);
+  const [vehiculos, setVehiculos] = useState([]);
+  const [hogares, setHogares] = useState([]);
 
   useEffect(() => {
     // Cargar opciones desde Firestore
     const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
       const cats = snapshot.docs.map(doc => doc.data().nombre);
       setCategorias(cats);
-      if (cats.length > 0 && !categoria) setCategoria(cats[0]); // Seleccionar el primero por defecto
+      setCategoria((actual) => actual || cats[0] || '');
     });
     
     const unsubUbi = onSnapshot(collection(db, 'ubicaciones'), (snapshot) => {
       const ubis = snapshot.docs.map(doc => doc.data().nombre);
       setUbicaciones(ubis);
-      if (ubis.length > 0 && !ubicacion) setUbicacion(ubis[0]);
+      setUbicacion((actual) => actual || ubis[0] || '');
     });
 
     return () => { unsubCat(); unsubUbi(); };
   }, []);
 
+  useEffect(() => {
+    const vehiculosQuery = query(collection(db, 'vehiculos'), where('propietarios', 'array-contains', user.uid));
+    const hogaresQuery = query(collection(db, 'hogares'), where('propietarios', 'array-contains', user.uid));
+
+    const unsubVehiculos = onSnapshot(vehiculosQuery, (snapshot) => {
+      setVehiculos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setVehiculoId((actual) => actual || snapshot.docs[0]?.id || '');
+    });
+
+    const unsubHogares = onSnapshot(hogaresQuery, (snapshot) => {
+      setHogares(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setHogarId((actual) => actual || snapshot.docs[0]?.id || '');
+    });
+
+    return () => { unsubVehiculos(); unsubHogares(); };
+  }, [user.uid]);
+
+  const categoriaNormalizada = normalizar(categoria);
+  const esAuto = categoriaNormalizada.includes('auto') || categoriaNormalizada.includes('vehiculo');
+  const esHogar = categoriaNormalizada.includes('hogar') || categoriaNormalizada.includes('casa');
+  const esTarjeta = categoriaNormalizada.includes('tarjeta') || categoriaNormalizada.includes('credito');
+
+  const handleEstadoCuentaChange = (e) => {
+    setEstadoCuentaFile(e.target.files?.[0] || null);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!monto || isNaN(monto)) return;
+    const montoNumerico = Number(monto);
+    if (!monto || Number.isNaN(montoNumerico) || montoNumerico <= 0) return;
+    if (esAuto && !vehiculoId) {
+      alert('Seleccioná o registrá un vehículo para asociar este gasto.');
+      return;
+    }
+    if (esHogar && !hogarId) {
+      alert('Seleccioná o registrá un hogar para asociar este gasto.');
+      return;
+    }
     
     setLoading(true);
     try {
-      await addDoc(collection(db, 'gastos'), {
+      let estadoCuenta = null;
+
+      if (esTarjeta && estadoCuentaFile) {
+        const estadoCuentaRef = ref(storage, `estados-cuenta/${user.uid}/${Date.now()}_${estadoCuentaFile.name}`);
+        const snapshot = await uploadBytes(estadoCuentaRef, estadoCuentaFile);
+        estadoCuenta = {
+          nombre: estadoCuentaFile.name,
+          tipo: estadoCuentaFile.type || 'application/pdf',
+          url: await getDownloadURL(snapshot.ref),
+          path: snapshot.ref.fullPath,
+        };
+      }
+
+      const batch = writeBatch(db);
+      const gastoRef = doc(collection(db, 'gastos'));
+
+      batch.set(gastoRef, {
         userId: user.uid,
-        monto: parseFloat(monto),
+        monto: montoNumerico,
         categoria,
-        ubicacion, // Cambiado de "hogar" a "ubicacion" para mayor flexibilidad
+        ubicacion,
+        vehiculoId: esAuto && vehiculoId ? vehiculoId : null,
+        hogarId: esHogar && hogarId ? hogarId : null,
+        estadoCuenta,
+        origen: esTarjeta ? 'tarjeta_credito' : 'manual',
         fecha: serverTimestamp(),
       });
 
-      if (categoria.toLowerCase() === 'auto' && kilometraje) {
-        const vehiculoRef = doc(db, 'vehiculos', 'auto_principal'); 
-        await updateDoc(vehiculoRef, { kilometraje_actual: Number(kilometraje) });
+      if (esAuto && vehiculoId && kilometraje) {
+        batch.update(doc(db, 'vehiculos', vehiculoId), { kilometraje_actual: Number(kilometraje) });
       }
+
+      await batch.commit();
 
       setMonto('');
       setKilometraje('');
+      setEstadoCuentaFile(null);
       alert('¡Gasto guardado con éxito!');
     } catch (error) {
       console.error("Detalle del error:", error);
@@ -102,10 +168,21 @@ export default function ExpenseForm({ user }) {
           </div>
 
           {/* Input condicional para el Auto */}
-          <div className={`transition-all duration-300 overflow-hidden ${categoria.toLowerCase() === 'auto' ? 'max-h-24 opacity-100' : 'max-h-0 opacity-0'}`}>
+          <div className={`transition-all duration-300 overflow-hidden ${esAuto ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'}`}>
             <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-center">
-              <span className="text-2xl mr-3">🚗</span>
+              <CarFront className="text-emerald-700 mr-3" size={28} />
               <div className="flex-1">
+                <label className="block text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">Vehículo</label>
+                <select
+                  value={vehiculoId}
+                  onChange={(e) => setVehiculoId(e.target.value)}
+                  className="w-full mb-2 text-sm font-bold text-emerald-900 bg-transparent outline-none"
+                >
+                  {vehiculos.length === 0 && <option value="">Registrá un vehículo primero</option>}
+                  {vehiculos.map(vehiculo => (
+                    <option key={vehiculo.id} value={vehiculo.id}>{vehiculo.nombre || `${vehiculo.marca} ${vehiculo.modelo}`}</option>
+                  ))}
+                </select>
                 <label className="block text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">Km al cargar</label>
                 <input 
                   type="number" 
@@ -115,6 +192,41 @@ export default function ExpenseForm({ user }) {
                   placeholder="Ej: 85000"
                   inputMode="numeric"
                 />
+              </div>
+            </div>
+          </div>
+
+          <div className={`transition-all duration-300 overflow-hidden ${esHogar ? 'max-h-24 opacity-100' : 'max-h-0 opacity-0'}`}>
+            <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex items-center">
+              <Home className="text-blue-700 mr-3" size={28} />
+              <div className="flex-1">
+                <label className="block text-xs font-bold text-blue-700 uppercase tracking-wider mb-1">Hogar</label>
+                <select
+                  value={hogarId}
+                  onChange={(e) => setHogarId(e.target.value)}
+                  className="w-full text-sm font-bold text-blue-900 bg-transparent outline-none"
+                >
+                  {hogares.length === 0 && <option value="">Registrá un hogar primero</option>}
+                  {hogares.map(hogar => (
+                    <option key={hogar.id} value={hogar.id}>{hogar.nombre}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className={`transition-all duration-300 overflow-hidden ${esTarjeta ? 'max-h-32 opacity-100' : 'max-h-0 opacity-0'}`}>
+            <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 flex items-center">
+              <FileText className="text-indigo-700 mr-3" size={28} />
+              <div className="flex-1">
+                <label className="block text-xs font-bold text-indigo-700 uppercase tracking-wider mb-1">Estado de cuenta</label>
+                <input
+                  type="file"
+                  accept="application/pdf,image/*"
+                  onChange={handleEstadoCuentaChange}
+                  className="w-full text-sm text-indigo-900 file:mr-3 file:rounded-xl file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"
+                />
+                {estadoCuentaFile && <p className="mt-2 text-xs font-medium text-indigo-700">{estadoCuentaFile.name}</p>}
               </div>
             </div>
           </div>
