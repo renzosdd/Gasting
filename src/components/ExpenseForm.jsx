@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
 import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { CarFront, CreditCard, FileText, Home, Mic, Plus, Sparkles, Wallet, X } from 'lucide-react';
+import { extractTextFromDocument } from '../utils/localOcr';
 
 const TIPOS_DESTINO = [
   { id: 'general', label: 'General', icon: Wallet },
@@ -60,6 +61,7 @@ export default function ExpenseForm({ user }) {
   const [voiceStatus, setVoiceStatus] = useState('');
   const [documentStatus, setDocumentStatus] = useState('');
   const [documentSuggestions, setDocumentSuggestions] = useState([]);
+  const [ocrText, setOcrText] = useState('');
   const [detalles, setDetalles] = useState({});
   const [loading, setLoading] = useState(false);
 
@@ -230,13 +232,19 @@ export default function ExpenseForm({ user }) {
     setDocumentSuggestions([]);
 
     try {
-      const fileData = await fileToBase64(estadoCuentaFile);
+      const extractedText = await extractTextFromDocument(estadoCuentaFile, setDocumentStatus);
+      setOcrText(extractedText);
+      setDocumentStatus('Enviando texto extraído a IA...');
+
+      const needsFallbackFile = extractedText.trim().length < 40;
+      const fileData = needsFallbackFile ? await fileToBase64(estadoCuentaFile) : null;
       const response = await fetch('/.netlify/functions/analyze-document', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileName: estadoCuentaFile.name,
           mimeType: estadoCuentaFile.type || 'application/octet-stream',
+          extractedText,
           fileData,
           categorias: categoriasDisponibles.map(categoria => ({
             nombre: categoria.nombre,
@@ -549,6 +557,7 @@ export default function ExpenseForm({ user }) {
                   <Sparkles size={18} /> Analizar con IA
                 </button>
                 {documentStatus && <p className="mt-2 text-xs font-medium text-indigo-700">{documentStatus}</p>}
+                {ocrText && <details className="mt-2 text-xs text-indigo-700"><summary className="font-bold">Ver texto OCR</summary><pre className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-white p-2 border border-indigo-100 max-h-40 overflow-auto">{ocrText}</pre></details>}
                 </div>
               </div>
             </div>

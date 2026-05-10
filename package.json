@@ -11,9 +11,11 @@
   "dependencies": {
     "firebase": "^12.12.1",
     "lucide-react": "^1.14.0",
+    "pdfjs-dist": "^5.7.284",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "recharts": "^3.8.1"
+    "recharts": "^3.8.1",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",

@@ -46,26 +46,47 @@ export const handler = async (event) => {
   }
 
   try {
-    const { fileName, mimeType, fileData, categorias = [], tarjetas = [] } = JSON.parse(event.body || '{}');
+    const { fileName, mimeType, fileData, extractedText, categorias = [], tarjetas = [] } = JSON.parse(event.body || '{}');
 
-    if (!fileName || !mimeType || !fileData) {
-      return { statusCode: 400, body: JSON.stringify({ error: 'Falta archivo para analizar.' }) };
+    if (!extractedText && (!fileName || !mimeType || !fileData)) {
+      return { statusCode: 400, body: JSON.stringify({ error: 'Falta texto o archivo para analizar.' }) };
     }
 
-    const isImage = mimeType.startsWith('image/');
-    const fileContent = isImage
-      ? { type: 'input_image', image_url: `data:${mimeType};base64,${fileData}`, detail: 'auto' }
-      : { type: 'input_file', filename: fileName, file_data: `data:${mimeType};base64,${fileData}` };
+    const content = [];
+
+    if (extractedText) {
+      content.push({ type: 'input_text', text: `Texto extraído localmente por OCR/text layer:\n\n${extractedText}` });
+    } else {
+      const isImage = mimeType.startsWith('image/');
+      content.push(isImage
+        ? { type: 'input_image', image_url: `data:${mimeType};base64,${fileData}`, detail: 'auto' }
+        : { type: 'input_file', filename: fileName, file_data: `data:${mimeType};base64,${fileData}` });
+    }
 
     const prompt = `
 Analiza este documento financiero para una app de gastos personales.
 
 Objetivo:
 - Extraer gastos sugeridos para que el usuario pueda confirmarlos antes de guardarlos.
-- Si es estado de cuenta de tarjeta, separar movimientos relevantes cuando sea posible.
-- Si parece un pago/resumen total de tarjeta, sugerir también un gasto tipo "tarjeta".
+- Sirve para estados de cuenta de tarjeta, tickets de supermercado, facturas de servicios, recibos y boletas.
+- Si es estado de cuenta de tarjeta:
+  - separar movimientos relevantes cuando estén disponibles;
+  - identificar cuotas, saldos, pagos mínimos o totales si aparecen;
+  - sugerir un gasto tipo "tarjeta" cuando el documento represente el pago/resumen total;
+  - usar "notas" para indicar cuotas pendientes o dudas.
+- Si es ticket/boleta:
+  - sugerir un gasto único cuando no convenga separar líneas;
+  - separar líneas solo si son importes claros y útiles.
+- Si es factura de servicio:
+  - usar tipoDestino "hogar" cuando corresponda;
+  - extraer vencimiento en "fecha" si aparece.
 - Usa las categorías existentes cuando calcen.
 - No inventes importes. Si no estás seguro, baja la confianza.
+- Moneda:
+  - UYU para pesos uruguayos, $, U$, UYU;
+  - USD para dólares, US$, USD.
+- Fechas: usa YYYY-MM-DD cuando puedas; si no hay fecha, deja string vacío.
+- Confianza: número entre 0 y 1.
 
 Categorías existentes:
 ${JSON.stringify(categorias)}
@@ -89,7 +110,7 @@ ${JSON.stringify(JSON_SCHEMA)}
           {
             role: 'user',
             content: [
-              fileContent,
+              ...content,
               { type: 'input_text', text: prompt },
             ],
           },

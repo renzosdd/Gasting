@@ -31,7 +31,7 @@ Los gastos de tarjeta pueden asociarse a una tarjeta registrada. Como Firebase S
 
 ## Análisis de documentos
 
-La app incluye una función de Netlify en `netlify/functions/analyze-document.js`. Recibe un PDF o imagen desde el formulario, usa un modelo liviano de OpenAI configurado por `OPENAI_MODEL` y devuelve gastos sugeridos para que el usuario confirme antes de guardarlos.
+La app extrae texto localmente en el navegador con OCR/text layer para PDFs e imágenes, y luego envía solo ese texto a la función de Netlify `netlify/functions/analyze-document.js`. La función usa un modelo liviano de OpenAI configurado por `OPENAI_MODEL` y devuelve gastos sugeridos para que el usuario confirme antes de guardarlos. Si el OCR local no obtiene texto suficiente, se usa el archivo como fallback.
 
 ## Reportes
 
