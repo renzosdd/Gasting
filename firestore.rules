@@ -8,7 +8,11 @@ service cloud.firestore {
 
     function isAdmin() {
       return signedIn()
-        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+        && (
+          request.auth.token.email == "renzodogliotti@gmail.com"
+          || exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+          || exists(/databases/$(database)/documents/admins/$(request.auth.token.email))
+        );
     }
 
     function ownsUserField() {
@@ -33,7 +37,7 @@ service cloud.firestore {
 
     match /admins/{adminId} {
       allow read: if signedIn() && (request.auth.uid == adminId || isAdmin());
-      allow write: if false;
+      allow write: if isAdmin();
     }
 
     match /categorias/{categoriaId} {

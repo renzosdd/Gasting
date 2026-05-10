@@ -14,6 +14,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [vistaActiva, setVistaActiva] = useState('form');
+  const [loginError, setLoginError] = useState('');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -28,8 +29,10 @@ function App() {
 
     const cargarAdmin = async () => {
       try {
-        const adminDoc = await getDoc(doc(db, 'admins', user.uid));
-        setIsAdmin(adminDoc.exists() || user.email === ADMIN_EMAIL);
+        const email = user.email?.toLowerCase();
+        const adminByUid = await getDoc(doc(db, 'admins', user.uid));
+        const adminByEmail = email ? await getDoc(doc(db, 'admins', email)) : null;
+        setIsAdmin(adminByUid.exists() || Boolean(adminByEmail?.exists()) || user.email === ADMIN_EMAIL);
       } catch (error) {
         console.error('No se pudo cargar el rol admin:', error);
         setIsAdmin(user.email === ADMIN_EMAIL);
@@ -40,6 +43,21 @@ function App() {
   }, [user]);
 
   if (!user) {
+    const handleLogin = async () => {
+      setLoginError('');
+
+      try {
+        await loginConGoogle();
+      } catch (error) {
+        console.error('Error al iniciar sesión:', error);
+        if (error.code === 'auth/unauthorized-domain') {
+          setLoginError('Este dominio todavía no está autorizado en Firebase Authentication.');
+          return;
+        }
+        setLoginError('No se pudo iniciar sesión. Probá de nuevo en unos segundos.');
+      }
+    };
+
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-zinc-900 p-6">
         <div className="bg-zinc-800 p-8 rounded-[2rem] shadow-2xl text-center w-full max-w-sm border border-zinc-700">
@@ -49,11 +67,14 @@ function App() {
           <h1 className="text-3xl font-extrabold mb-2 text-white">Gasting</h1>
           <p className="text-zinc-400 mb-8 text-sm">Controlá tus números de forma inteligente.</p>
           <button 
-            onClick={loginConGoogle}
+            onClick={handleLogin}
             className="w-full bg-white text-zinc-900 font-bold py-4 rounded-2xl hover:bg-zinc-100 transition-all active:scale-95"
           >
             Continuar con Google
           </button>
+          {loginError && (
+            <p className="mt-4 text-sm font-medium text-red-300">{loginError}</p>
+          )}
         </div>
       </div>
     );
