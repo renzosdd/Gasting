@@ -23,7 +23,7 @@ export default function ExpenseHistory({ user }) {
   const [gastos, setGastos] = useState([]);
   const [mes, setMes] = useState(currentMonth());
   const [editando, setEditando] = useState(null);
-  const [form, setForm] = useState({ monto: '', tipoDestino: 'general', categoria: '', subcategoria: '', ubicacion: '', gastoFijo: false });
+  const [form, setForm] = useState({ monto: '', tipoDestino: 'general', categoria: '', subcategoria: '' });
 
   useEffect(() => {
     const q = query(collection(db, 'gastos'), where('userId', '==', user.uid));
@@ -46,14 +46,12 @@ export default function ExpenseHistory({ user }) {
       tipoDestino: gasto.tipoDestino || 'general',
       categoria: gasto.categoriaGrupo || '',
       subcategoria: gasto.subcategoria || gasto.categoria || '',
-      ubicacion: gasto.ubicacion || '',
-      gastoFijo: Boolean(gasto.gastoFijo),
     });
   };
 
   const cancelar = () => {
     setEditando(null);
-    setForm({ monto: '', tipoDestino: 'general', categoria: '', subcategoria: '', ubicacion: '', gastoFijo: false });
+    setForm({ monto: '', tipoDestino: 'general', categoria: '', subcategoria: '' });
   };
 
   const guardar = async (gasto) => {
@@ -63,8 +61,6 @@ export default function ExpenseHistory({ user }) {
       categoriaGrupo: form.categoria,
       categoria: form.subcategoria || form.categoria,
       subcategoria: form.subcategoria,
-      ubicacion: form.ubicacion,
-      gastoFijo: form.gastoFijo,
     });
     cancelar();
   };
@@ -112,11 +108,6 @@ export default function ExpenseHistory({ user }) {
                   <input value={form.categoria} onChange={e => setForm({ ...form, categoria: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none" placeholder="Categoría" />
                   <input value={form.subcategoria} onChange={e => setForm({ ...form, subcategoria: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none" placeholder="Subcategoría" />
                 </div>
-                <input value={form.ubicacion} onChange={e => setForm({ ...form, ubicacion: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none" placeholder="Ubicación" />
-                <label className="flex items-center gap-2 text-sm font-bold text-zinc-700">
-                  <input type="checkbox" checked={form.gastoFijo} onChange={e => setForm({ ...form, gastoFijo: e.target.checked })} className="w-5 h-5 accent-emerald-500" />
-                  Gasto fijo
-                </label>
                 <div className="flex gap-2">
                   <button onClick={() => guardar(gasto)} className="flex-1 p-3 rounded-2xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2"><Save size={18} /> Guardar</button>
                   <button onClick={cancelar} className="p-3 rounded-2xl bg-zinc-100 text-zinc-500"><X size={18} /></button>
@@ -130,7 +121,7 @@ export default function ExpenseHistory({ user }) {
                     <p className="text-xs font-bold text-zinc-400">{formatDate(gasto.fecha)}</p>
                   </div>
                   <p className="font-bold text-zinc-700 truncate">{gasto.subcategoria || gasto.categoria}</p>
-                  <p className="text-sm text-zinc-500 truncate">{gasto.categoriaGrupo || gasto.tipoDestino || 'General'} · {gasto.ubicacion || 'Sin ubicación'}</p>
+                  <p className="text-sm text-zinc-500 truncate">{gasto.categoriaGrupo || 'Sin categoría'} · {gasto.tipoDestino || 'general'}</p>
                   {(gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre) && (
                     <p className="text-xs font-bold text-emerald-600 mt-1">{gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre}</p>
                   )}

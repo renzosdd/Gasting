@@ -14,21 +14,17 @@ const normalizarEmail = (email) => email.trim().toLowerCase();
 
 export default function AdminPanel() {
   const [categorias, setCategorias] = useState([]);
-  const [ubicaciones, setUbicaciones] = useState([]);
   const [admins, setAdmins] = useState([]);
   const [sugerencias, setSugerencias] = useState([]);
+  const [categoriaSugerencias, setCategoriaSugerencias] = useState([]);
   const [categoriaNombre, setCategoriaNombre] = useState('');
   const [categoriaTipo, setCategoriaTipo] = useState('general');
   const [subcategoriaPorCategoria, setSubcategoriaPorCategoria] = useState({});
-  const [nuevaUbi, setNuevaUbi] = useState('');
   const [nuevoAdmin, setNuevoAdmin] = useState('');
 
   useEffect(() => {
     const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
       setCategorias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
-    const unsubUbi = onSnapshot(collection(db, 'ubicaciones'), (snapshot) => {
-      setUbicaciones(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
     const unsubAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
       setAdmins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -36,7 +32,10 @@ export default function AdminPanel() {
     const unsubSugerencias = onSnapshot(collection(db, 'subcategoria_sugerencias'), (snapshot) => {
       setSugerencias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-    return () => { unsubCat(); unsubUbi(); unsubAdmins(); unsubSugerencias(); };
+    const unsubCategoriaSugerencias = onSnapshot(collection(db, 'categoria_sugerencias'), (snapshot) => {
+      setCategoriaSugerencias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => { unsubCat(); unsubAdmins(); unsubSugerencias(); unsubCategoriaSugerencias(); };
   }, []);
 
   const categoriasOrdenadas = useMemo(() => (
@@ -98,15 +97,13 @@ export default function AdminPanel() {
     await updateDoc(doc(db, 'subcategoria_sugerencias', sugerencia.id), { estado: 'aprobada' });
   };
 
-  const handleAddUbicacion = async () => {
-    const nombre = nuevaUbi.trim();
-    if (!nombre) return;
-    try {
-      await addDoc(collection(db, 'ubicaciones'), { nombre });
-      setNuevaUbi('');
-    } catch (error) {
-      alert('Error al guardar ubicación: ' + error.message);
-    }
+  const aprobarCategoria = async (sugerencia) => {
+    await addDoc(collection(db, 'categorias'), {
+      nombre: sugerencia.nombre,
+      tipoDestino: sugerencia.tipoDestino || 'general',
+      subcategorias: sugerencia.subcategorias || [],
+    });
+    await updateDoc(doc(db, 'categoria_sugerencias', sugerencia.id), { estado: 'aprobada' });
   };
 
   const handleAddAdmin = async () => {
@@ -199,7 +196,26 @@ export default function AdminPanel() {
       </div>
 
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
-        <h2 className="text-xl font-bold text-zinc-800 mb-4">Sugerencias</h2>
+        <h2 className="text-xl font-bold text-zinc-800 mb-4">Categorías sugeridas</h2>
+        <div className="space-y-2">
+          {categoriaSugerencias.filter(s => s.estado === 'pendiente').length === 0 && (
+            <p className="text-sm text-zinc-400 text-center py-6">No hay categorías pendientes.</p>
+          )}
+          {categoriaSugerencias.filter(s => s.estado === 'pendiente').map(sugerencia => (
+            <div key={sugerencia.id} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+              <p className="font-bold text-zinc-800">{sugerencia.nombre}</p>
+              <p className="text-xs text-zinc-500 mb-3">{sugerencia.tipoDestino}</p>
+              <div className="flex gap-2">
+                <button onClick={() => aprobarCategoria(sugerencia)} className="flex-1 p-3 rounded-xl bg-emerald-500 text-white font-bold text-sm">Aprobar</button>
+                <button onClick={() => updateDoc(doc(db, 'categoria_sugerencias', sugerencia.id), { estado: 'rechazada' })} className="flex-1 p-3 rounded-xl bg-zinc-200 text-zinc-600 font-bold text-sm">Rechazar</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
+        <h2 className="text-xl font-bold text-zinc-800 mb-4">Subcategorías sugeridas</h2>
         <div className="space-y-2">
           {sugerencias.filter(s => s.estado === 'pendiente').length === 0 && (
             <p className="text-sm text-zinc-400 text-center py-6">No hay sugerencias pendientes.</p>
@@ -215,32 +231,6 @@ export default function AdminPanel() {
             </div>
           ))}
         </div>
-      </div>
-
-      <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
-        <h2 className="text-xl font-bold text-zinc-800 mb-4">Ubicaciones</h2>
-        <div className="flex gap-2 mb-4">
-          <input
-            type="text"
-            value={nuevaUbi}
-            onChange={(e) => setNuevaUbi(e.target.value)}
-            className="flex-1 p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
-            placeholder="Nueva ubicación..."
-          />
-          <button onClick={handleAddUbicacion} className="bg-zinc-900 text-white p-3 rounded-xl hover:bg-zinc-800">
-            <Plus size={20} />
-          </button>
-        </div>
-        <ul className="space-y-2">
-          {ubicaciones.map(u => (
-            <li key={u.id} className="flex justify-between items-center p-3 bg-zinc-50 rounded-xl border border-zinc-100">
-              <span className="font-medium text-zinc-700">{u.nombre}</span>
-              <button onClick={() => handleDelete('ubicaciones', u.id)} className="text-red-400 hover:text-red-600">
-                <Trash2 size={18} />
-              </button>
-            </li>
-          ))}
-        </ul>
       </div>
 
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">

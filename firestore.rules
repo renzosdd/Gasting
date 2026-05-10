@@ -62,6 +62,12 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    match /categoria_sugerencias/{sugerenciaId} {
+      allow create: if ownsUserField();
+      allow read: if isAdmin() || ownsResourceUserField();
+      allow update, delete: if isAdmin();
+    }
+
     match /vehiculos/{vehiculoId} {
       allow create: if ownsNewEntity();
       allow read, delete: if ownsExistingEntity();

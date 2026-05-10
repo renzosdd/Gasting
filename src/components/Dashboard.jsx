@@ -12,7 +12,6 @@ const VISTAS = [
   { id: 'vehiculos', label: 'Autos' },
   { id: 'hogares', label: 'Casas' },
   { id: 'mensual', label: 'Meses' },
-  { id: 'fijos', label: 'Fijos' },
   { id: 'tarjetas', label: 'Tarjetas' },
   { id: 'vencimientos', label: 'Vence' },
 ];
@@ -73,7 +72,6 @@ export default function Dashboard({ user }) {
     if (vista === 'vehiculos') return agrupar(gastosFiltrados.filter(g => (g.tipoDestino || '') === 'vehiculo'), gasto => gasto.vehiculoNombre || 'Auto sin asociar');
     if (vista === 'hogares') return agrupar(gastosFiltrados.filter(g => (g.tipoDestino || '') === 'hogar'), gasto => gasto.hogarNombre || 'Casa sin asociar');
     if (vista === 'mensual') return agrupar(gastos, mesDeGasto).sort((a, b) => a.name.localeCompare(b.name));
-    if (vista === 'fijos') return agrupar(gastosFiltrados, gasto => gasto.gastoFijo ? 'Fijos' : 'Variables');
     if (vista === 'tarjetas') return agrupar(gastosFiltrados.filter(g => (g.tipoDestino || '') === 'tarjeta'), gasto => gasto.tarjetaNombre || 'Tarjeta sin asociar');
     return [];
   }, [gastos, gastosFiltrados, vista]);

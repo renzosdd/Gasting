@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
 import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
-import { CarFront, CreditCard, FileText, Home, Wallet } from 'lucide-react';
+import { CarFront, CreditCard, FileText, Home, Mic, Plus, Wallet, X } from 'lucide-react';
 
 const TIPOS_DESTINO = [
   { id: 'general', label: 'General', icon: Wallet },
@@ -41,17 +41,20 @@ export default function ExpenseForm({ user }) {
   const [tipoDestino, setTipoDestino] = useState('general');
   const [categoriaId, setCategoriaId] = useState('');
   const [subcategoria, setSubcategoria] = useState('');
-  const [ubicacion, setUbicacion] = useState('');
   const [vehiculoId, setVehiculoId] = useState('');
   const [hogarId, setHogarId] = useState('');
   const [tarjetaId, setTarjetaId] = useState('');
   const [estadoCuentaFile, setEstadoCuentaFile] = useState(null);
   const [subcategoriaSugerida, setSubcategoriaSugerida] = useState('');
+  const [categoriaSugerida, setCategoriaSugerida] = useState('');
+  const [showCategoriaInput, setShowCategoriaInput] = useState(false);
+  const [showSubcategoriaInput, setShowSubcategoriaInput] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState('');
   const [detalles, setDetalles] = useState({});
   const [loading, setLoading] = useState(false);
 
   const [categorias, setCategorias] = useState([]);
-  const [ubicaciones, setUbicaciones] = useState([]);
+  const [categoriasUsuario, setCategoriasUsuario] = useState([]);
   const [vehiculos, setVehiculos] = useState([]);
   const [hogares, setHogares] = useState([]);
   const [tarjetas, setTarjetas] = useState([]);
@@ -60,13 +63,12 @@ export default function ExpenseForm({ user }) {
     const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
       setCategorias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-    const unsubUbi = onSnapshot(collection(db, 'ubicaciones'), (snapshot) => {
-      const ubis = snapshot.docs.map(doc => doc.data().nombre);
-      setUbicaciones(ubis);
-      setUbicacion((actual) => actual || ubis[0] || '');
+    const sugerenciasQuery = query(collection(db, 'categoria_sugerencias'), where('userId', '==', user.uid));
+    const unsubCatUsuario = onSnapshot(sugerenciasQuery, (snapshot) => {
+      setCategoriasUsuario(snapshot.docs.map(doc => ({ id: `sugerida-${doc.id}`, sugerenciaId: doc.id, ...doc.data(), esSugerida: true })));
     });
-    return () => { unsubCat(); unsubUbi(); };
-  }, []);
+    return () => { unsubCat(); unsubCatUsuario(); };
+  }, [user.uid]);
 
   useEffect(() => {
     const vehiculosQuery = query(collection(db, 'vehiculos'), where('propietarios', 'array-contains', user.uid));
@@ -86,11 +88,16 @@ export default function ExpenseForm({ user }) {
     return () => { unsubVehiculos(); unsubHogares(); unsubTarjetas(); };
   }, [user.uid]);
 
-  const categoriasFiltradas = useMemo(() => (
-    categorias.filter(categoria => (categoria.tipoDestino || 'general') === tipoDestino)
-  ), [categorias, tipoDestino]);
+  const categoriasDisponibles = useMemo(() => ([
+    ...categorias,
+    ...categoriasUsuario.filter(categoria => categoria.estado !== 'rechazada'),
+  ]), [categorias, categoriasUsuario]);
 
-  const categoriaSeleccionada = categorias.find(categoria => categoria.id === categoriaId);
+  const categoriasFiltradas = useMemo(() => (
+    categoriasDisponibles.filter(categoria => (categoria.tipoDestino || 'general') === tipoDestino)
+  ), [categoriasDisponibles, tipoDestino]);
+
+  const categoriaSeleccionada = categoriasDisponibles.find(categoria => categoria.id === categoriaId);
   const subcategorias = useMemo(() => (
     Array.isArray(categoriaSeleccionada?.subcategorias) ? categoriaSeleccionada.subcategorias : []
   ), [categoriaSeleccionada]);
@@ -116,6 +123,90 @@ export default function ExpenseForm({ user }) {
   };
 
   const getCategoriaNombre = () => categoriaSeleccionada?.nombre || '';
+
+  const sugerirCategoria = async () => {
+    const nombre = categoriaSugerida.trim();
+    if (!nombre) return;
+
+    try {
+      const docRef = await addDoc(collection(db, 'categoria_sugerencias'), {
+        userId: user.uid,
+        nombre,
+        tipoDestino,
+        subcategorias: [],
+        estado: 'pendiente',
+        fecha: serverTimestamp(),
+      });
+      setCategoriaId(`sugerida-${docRef.id}`);
+      setCategoriaSugerida('');
+      setShowCategoriaInput(false);
+    } catch (error) {
+      alert('Error al sugerir categoría: ' + error.message);
+    }
+  };
+
+  const sugerirSubcategoria = async () => {
+    const nombre = subcategoriaSugerida.trim();
+    if (!nombre || !categoriaId) return;
+
+    try {
+      await addDoc(collection(db, 'subcategoria_sugerencias'), {
+        userId: user.uid,
+        categoriaId: categoriaSeleccionada?.sugerenciaId || categoriaId,
+        categoriaNombre: getCategoriaNombre(),
+        tipoDestino,
+        nombre,
+        estado: 'pendiente',
+        fecha: serverTimestamp(),
+      });
+      setSubcategoria(nombre);
+      setShowSubcategoriaInput(false);
+    } catch (error) {
+      alert('Error al sugerir subcategoría: ' + error.message);
+    }
+  };
+
+  const interpretarVoz = (texto) => {
+    const limpio = normalizar(texto);
+    const montoMatch = limpio.match(/(\d+(?:[.,]\d+)?)/);
+    if (montoMatch) setMonto(montoMatch[1].replace(',', '.'));
+
+    if (limpio.includes('auto') || limpio.includes('vehiculo') || limpio.includes('nafta') || limpio.includes('combustible')) setTipoDestino('vehiculo');
+    else if (limpio.includes('casa') || limpio.includes('hogar') || limpio.includes('ute') || limpio.includes('ose')) setTipoDestino('hogar');
+    else if (limpio.includes('tarjeta') || limpio.includes('visa') || limpio.includes('master')) setTipoDestino('tarjeta');
+    else setTipoDestino('general');
+
+    const categoriaDetectada = categoriasDisponibles.find(categoria => limpio.includes(normalizar(categoria.nombre)));
+    if (categoriaDetectada) setCategoriaId(categoriaDetectada.id);
+
+    const subDetectada = categoriasDisponibles.flatMap(categoria => categoria.subcategorias || []).find(sub => {
+      const nombre = getSubcategoriaNombre(sub);
+      return nombre && limpio.includes(normalizar(nombre));
+    });
+    if (subDetectada) setSubcategoria(getSubcategoriaNombre(subDetectada));
+  };
+
+  const iniciarVoz = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceStatus('Tu navegador no soporta dictado por voz.');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'es-UY';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => setVoiceStatus('Escuchando...');
+    recognition.onerror = () => setVoiceStatus('No pude escuchar bien. Probá de nuevo.');
+    recognition.onresult = (event) => {
+      const texto = event.results[0][0].transcript;
+      interpretarVoz(texto);
+      setVoiceStatus(`Interpretado: "${texto}"`);
+    };
+    recognition.onend = () => setTimeout(() => setVoiceStatus(''), 5000);
+    recognition.start();
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -147,7 +238,6 @@ export default function ExpenseForm({ user }) {
         categoriaGrupo: getCategoriaNombre(),
         categoria: subcategoriaFinal || getCategoriaNombre(),
         subcategoria: subcategoriaFinal || null,
-        ubicacion,
         vehiculoId: tipoDestino === 'vehiculo' && vehiculoId ? vehiculoId : null,
         vehiculoNombre: tipoDestino === 'vehiculo' && vehiculoSeleccionado ? vehiculoSeleccionado.nombre || `${vehiculoSeleccionado.marca} ${vehiculoSeleccionado.modelo}` : null,
         hogarId: tipoDestino === 'hogar' && hogarId ? hogarId : null,
@@ -155,24 +245,11 @@ export default function ExpenseForm({ user }) {
         tarjetaId: tipoDestino === 'tarjeta' && tarjetaId ? tarjetaId : null,
         tarjetaNombre: tipoDestino === 'tarjeta' && tarjetaSeleccionada ? tarjetaSeleccionada.nombre || `${tarjetaSeleccionada.banco} ${tarjetaSeleccionada.marca}` : null,
         detalles,
-        gastoFijo: Boolean(detalles.gastoFijo),
         estadoCuenta,
         estadoCuentaPendiente: tipoDestino === 'tarjeta' && !estadoCuenta,
         origen: tipoDestino === 'tarjeta' ? 'tarjeta_credito' : 'manual',
         fecha: serverTimestamp(),
       });
-
-      if (subcategoriaSugerida.trim()) {
-        await addDoc(collection(db, 'subcategoria_sugerencias'), {
-          userId: user.uid,
-          categoriaId,
-          categoriaNombre: getCategoriaNombre(),
-          tipoDestino,
-          nombre: subcategoriaSugerida.trim(),
-          estado: 'pendiente',
-          fecha: serverTimestamp(),
-        });
-      }
 
       if (tipoDestino === 'vehiculo' && vehiculoId && detalles.kilometraje) {
         batch.update(doc(db, 'vehiculos', vehiculoId), { kilometraje_actual: Number(detalles.kilometraje) });
@@ -183,6 +260,7 @@ export default function ExpenseForm({ user }) {
       setMonto('');
       setEstadoCuentaFile(null);
       setSubcategoriaSugerida('');
+      setCategoriaSugerida('');
       setDetalles({});
       alert('¡Gasto guardado con éxito!');
     } catch (error) {
@@ -209,6 +287,14 @@ export default function ExpenseForm({ user }) {
               autoFocus
             />
           </div>
+          <button
+            type="button"
+            onClick={iniciarVoz}
+            className="mt-5 px-4 py-3 rounded-full bg-zinc-900 text-white font-bold text-sm flex items-center gap-2 active:scale-95 transition-all"
+          >
+            <Mic size={18} /> Agregar por voz
+          </button>
+          {voiceStatus && <p className="mt-3 text-xs font-medium text-zinc-500 text-center">{voiceStatus}</p>}
         </div>
 
         <div className="space-y-6 mb-8 bg-white p-6 rounded-[2rem] border border-zinc-100 shadow-sm">
@@ -234,36 +320,64 @@ export default function ExpenseForm({ user }) {
 
           <div>
             <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 ml-1">Categoría</label>
-            <select
-              value={categoriaId}
-              onChange={(e) => setCategoriaId(e.target.value)}
-              className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
-            >
-              {categoriasFiltradas.length === 0 && <option value="">Creá categorías en Admin</option>}
-              {categoriasFiltradas.map(cat => <option key={cat.id} value={cat.id}>{cat.nombre}</option>)}
-            </select>
+            <div className="flex gap-2">
+              <select
+                value={categoriaId}
+                onChange={(e) => setCategoriaId(e.target.value)}
+                className="flex-1 p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                {categoriasFiltradas.length === 0 && <option value="">Agregá una categoría</option>}
+                {categoriasFiltradas.map(cat => <option key={cat.id} value={cat.id}>{cat.nombre}{cat.esSugerida ? ' (tuya)' : ''}</option>)}
+              </select>
+              <button type="button" onClick={() => setShowCategoriaInput(true)} className="w-14 rounded-2xl bg-zinc-900 text-white flex items-center justify-center">
+                <Plus size={20} />
+              </button>
+            </div>
+            {showCategoriaInput && (
+              <div className="mt-2 flex gap-2">
+                <input
+                  value={categoriaSugerida}
+                  onChange={(e) => setCategoriaSugerida(e.target.value)}
+                  className="flex-1 p-3 bg-white border border-dashed border-zinc-300 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
+                  placeholder="Nueva categoría..."
+                />
+                <button type="button" onClick={sugerirCategoria} className="px-4 rounded-2xl bg-emerald-500 text-white font-bold">OK</button>
+                <button type="button" onClick={() => setShowCategoriaInput(false)} className="px-3 rounded-2xl bg-zinc-100 text-zinc-500"><X size={18} /></button>
+              </div>
+            )}
           </div>
 
           <div>
             <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 ml-1">Subcategoría</label>
-            <select
-              value={subcategoria}
-              onChange={(e) => setSubcategoria(e.target.value)}
-              className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
-            >
-              {subcategorias.length === 0 && <option value="">Sin subcategoría</option>}
-              {subcategorias.map(sub => {
-                const nombre = getSubcategoriaNombre(sub);
-                return <option key={nombre} value={nombre}>{nombre}</option>;
-              })}
-            </select>
-            <input
-              value={subcategoriaSugerida}
-              onChange={(e) => setSubcategoriaSugerida(e.target.value)}
-              className="w-full mt-2 p-3 bg-white border border-dashed border-zinc-300 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
-              placeholder="Sugerir otra subcategoría..."
-            />
-            {subcategoriaSugerida && <p className="mt-2 text-xs font-medium text-zinc-500">Se guarda en este gasto y queda pendiente para que un admin la apruebe.</p>}
+            <div className="flex gap-2">
+              <select
+                value={subcategoria}
+                onChange={(e) => setSubcategoria(e.target.value)}
+                className="flex-1 p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                {subcategorias.length === 0 && <option value="">Sin subcategoría</option>}
+                {subcategorias.map(sub => {
+                  const nombre = getSubcategoriaNombre(sub);
+                  return <option key={nombre} value={nombre}>{nombre}</option>;
+                })}
+                {subcategoriaSugerida && <option value={subcategoriaSugerida}>{subcategoriaSugerida} (tuya)</option>}
+              </select>
+              <button type="button" onClick={() => setShowSubcategoriaInput(true)} className="w-14 rounded-2xl bg-zinc-900 text-white flex items-center justify-center">
+                <Plus size={20} />
+              </button>
+            </div>
+            {showSubcategoriaInput && (
+              <div className="mt-2 flex gap-2">
+                <input
+                  value={subcategoriaSugerida}
+                  onChange={(e) => setSubcategoriaSugerida(e.target.value)}
+                  className="flex-1 p-3 bg-white border border-dashed border-zinc-300 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
+                  placeholder="Nueva subcategoría..."
+                />
+                <button type="button" onClick={sugerirSubcategoria} className="px-4 rounded-2xl bg-emerald-500 text-white font-bold">OK</button>
+                <button type="button" onClick={() => setShowSubcategoriaInput(false)} className="px-3 rounded-2xl bg-zinc-100 text-zinc-500"><X size={18} /></button>
+              </div>
+            )}
           </div>
 
           {tipoDestino === 'vehiculo' && (
@@ -360,27 +474,6 @@ export default function ExpenseForm({ user }) {
             </div>
           )}
 
-          <label className="flex items-center gap-3 p-4 bg-zinc-50 border border-zinc-100 rounded-2xl">
-            <input
-              type="checkbox"
-              checked={Boolean(detalles.gastoFijo)}
-              onChange={(e) => handleDetalleChange('gastoFijo', e.target.checked)}
-              className="w-5 h-5 accent-emerald-500"
-            />
-            <span className="text-sm font-bold text-zinc-700">Es gasto fijo</span>
-          </label>
-
-          <div>
-            <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 ml-1">Lugar del gasto</label>
-            <select
-              value={ubicacion}
-              onChange={(e) => setUbicacion(e.target.value)}
-              className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
-            >
-              {ubicaciones.length === 0 && <option value="">Sin ubicaciones</option>}
-              {ubicaciones.map(ubi => <option key={ubi} value={ubi}>{ubi}</option>)}
-            </select>
-          </div>
         </div>
 
         <button
