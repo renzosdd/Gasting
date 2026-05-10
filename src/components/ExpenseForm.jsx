@@ -130,10 +130,6 @@ export default function ExpenseForm({ user }) {
     setDetalles((actual) => ({ ...actual, [campo]: valor }));
   };
 
-  const handleEstadoCuentaChange = (e) => {
-    setEstadoCuentaFile(e.target.files?.[0] || null);
-  };
-
   const getCategoriaNombre = () => categoriaSeleccionada?.nombre || '';
 
   const sugerirCategoria = async () => {
@@ -404,6 +400,29 @@ export default function ExpenseForm({ user }) {
           >
             <Mic size={18} /> Agregar por voz
           </button>
+          <label className="mt-3 px-4 py-3 rounded-full bg-white border border-zinc-200 text-zinc-800 font-bold text-sm flex items-center gap-2 active:scale-95 transition-all shadow-sm cursor-pointer">
+            <FileText size={18} /> Analizar documento
+            <input
+              type="file"
+              accept="application/pdf,image/*"
+              onChange={(e) => setEstadoCuentaFile(e.target.files?.[0] || null)}
+              className="hidden"
+            />
+          </label>
+          {estadoCuentaFile && (
+            <div className="mt-3 w-full max-w-sm rounded-2xl border border-indigo-100 bg-indigo-50 p-3 text-center">
+              <p className="text-xs font-bold text-indigo-700 break-words">{estadoCuentaFile.name}</p>
+              <button
+                type="button"
+                onClick={analizarDocumento}
+                className="mt-3 w-full p-3 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center gap-2"
+              >
+                <Sparkles size={18} /> Analizar con IA
+              </button>
+              {documentStatus && <p className="mt-2 text-xs font-medium text-indigo-700">{documentStatus}</p>}
+              {ocrText && <details className="mt-2 text-xs text-indigo-700 text-left"><summary className="font-bold cursor-pointer">Ver texto OCR</summary><pre className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-white p-2 border border-indigo-100 max-h-40 overflow-auto">{ocrText}</pre></details>}
+            </div>
+          )}
           {voiceStatus && <p className="mt-3 text-xs font-medium text-zinc-500 text-center">{voiceStatus}</p>}
         </div>
 
@@ -536,29 +555,6 @@ export default function ExpenseForm({ user }) {
                     <option key={tarjeta.id} value={tarjeta.id}>{tarjeta.nombre || `${tarjeta.banco} ${tarjeta.marca}`}</option>
                   ))}
                 </select>
-              </div>
-              <div className="flex items-start">
-                <FileText className="text-indigo-700 mr-3 mt-1" size={28} />
-                <div className="flex-1">
-                <label className="block text-xs font-bold text-indigo-700 uppercase tracking-wider mb-1">Estado de cuenta opcional</label>
-                <input
-                  type="file"
-                  accept="application/pdf,image/*"
-                  onChange={handleEstadoCuentaChange}
-                  className="w-full text-sm text-indigo-900 file:mr-3 file:rounded-xl file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"
-                />
-                <p className="mt-2 text-xs text-indigo-700">No se sube a Firebase Storage. Queda registrado el nombre para cargarlo cuando definamos almacenamiento.</p>
-                {estadoCuentaFile && <p className="mt-2 text-xs font-medium text-indigo-700">{estadoCuentaFile.name}</p>}
-                <button
-                  type="button"
-                  onClick={analizarDocumento}
-                  className="mt-3 w-full p-3 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center gap-2"
-                >
-                  <Sparkles size={18} /> Analizar con IA
-                </button>
-                {documentStatus && <p className="mt-2 text-xs font-medium text-indigo-700">{documentStatus}</p>}
-                {ocrText && <details className="mt-2 text-xs text-indigo-700"><summary className="font-bold">Ver texto OCR</summary><pre className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-white p-2 border border-indigo-100 max-h-40 overflow-auto">{ocrText}</pre></details>}
-                </div>
               </div>
             </div>
           )}
