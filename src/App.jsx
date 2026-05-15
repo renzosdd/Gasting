@@ -2,12 +2,10 @@ import { useState, useEffect } from 'react';
 import { auth, db, loginConGoogle, logout } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { History, LogOut, Plus, BarChart3, Settings, User, X } from 'lucide-react';
+import { BarChart3, LogOut, Settings, User, X } from 'lucide-react';
 import ExpenseForm from './components/ExpenseForm';
-import Dashboard from './components/Dashboard';
 import AdminPanel from './components/AdminPanel';
 import EntitiesManager from './components/EntitiesManager';
-import ExpenseHistory from './components/ExpenseHistory';
 import LandingPage from './components/LandingPage';
 import Home from './components/Home';
 
@@ -97,15 +95,13 @@ function App() {
             onAddExpense={(mode) => setExpenseModal(mode)}
           />
         )}
-        {vistaActiva === 'dashboard' && <Dashboard user={user} />}
-        {vistaActiva === 'history' && <ExpenseHistory user={user} />}
         {vistaActiva === 'profile' && <EntitiesManager user={user} />}
         {vistaActiva === 'admin' && isAdmin && <AdminPanel user={user} />}
       </main>
 
       {expenseModal && (
-        <div className="fixed inset-0 z-40 bg-black/40 flex items-end justify-center px-3 pb-3">
-          <div className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-[2rem] bg-zinc-50 p-4 shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
+        <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm flex items-end justify-center px-3 pb-3">
+          <div className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-[2rem] bg-zinc-50 p-4 shadow-2xl animate-in slide-in-from-bottom-6 fade-in duration-300">
             <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-2 bg-zinc-50/90 backdrop-blur-md px-4 pt-4 pb-2 flex items-center justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wider text-emerald-600">Nuevo gasto</p>
@@ -138,40 +134,11 @@ function App() {
             onClick={() => setVistaActiva('home')}
             className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'home' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
           >
-            <History size={24} strokeWidth={vistaActiva === 'home' ? 2.5 : 2} />
+            <BarChart3 size={24} strokeWidth={vistaActiva === 'home' ? 2.5 : 2} />
           </button>
           
           <div className="w-px h-8 bg-zinc-700"></div>
-          
-          {/* Botón: Dashboard Global */}
-          <button 
-            onClick={() => setVistaActiva('dashboard')}
-            className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'dashboard' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
-          >
-            <BarChart3 size={24} strokeWidth={vistaActiva === 'dashboard' ? 2.5 : 2} />
-          </button>
 
-          <div className="w-px h-8 bg-zinc-700"></div>
-
-          <button 
-            onClick={() => setExpenseModal('manual')}
-            className="flex-1 flex justify-center py-3 rounded-full transition-all text-zinc-400 hover:text-white"
-          >
-            <Plus size={24} />
-          </button>
-
-          <div className="w-px h-8 bg-zinc-700"></div>
-
-          <button 
-            onClick={() => setVistaActiva('history')}
-            className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'history' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
-          >
-            <History size={24} strokeWidth={vistaActiva === 'history' ? 2.5 : 2} />
-          </button>
-
-          <div className="w-px h-8 bg-zinc-700"></div>
-
-          {/* Botón: Mis Entidades (Vehículos/Hogares) */}
           <button 
             onClick={() => setVistaActiva('profile')}
             className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'profile' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}

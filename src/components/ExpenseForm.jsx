@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { db } from '../firebase';
 import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { CarFront, CreditCard, FileText, Home, Mic, Plus, Sparkles, Wallet, X } from 'lucide-react';
@@ -40,6 +40,9 @@ const campoExtra = (subcategoria, tipoDestino) => {
 };
 
 export default function ExpenseForm({ user, initialAction = 'manual', onSaved }) {
+  const fileInputRef = useRef(null);
+  const autoStartedRef = useRef(false);
+  const autoAnalyzedFileRef = useRef('');
   const [monto, setMonto] = useState('');
   const [moneda, setMoneda] = useState('UYU');
   const [tipoDestino, setTipoDestino] = useState('general');
@@ -367,6 +370,25 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     }
   };
 
+  useEffect(() => {
+    if (initialAction === 'manual' || autoStartedRef.current) return;
+    if (initialAction === 'voice') {
+      autoStartedRef.current = true;
+      setTimeout(() => iniciarVoz(), 250);
+    }
+    if (initialAction === 'document') {
+      autoStartedRef.current = true;
+      setTimeout(() => fileInputRef.current?.click(), 250);
+    }
+  }, [initialAction]);
+
+  useEffect(() => {
+    if (initialAction !== 'document' || !estadoCuentaFile) return;
+    if (autoAnalyzedFileRef.current === estadoCuentaFile.name) return;
+    autoAnalyzedFileRef.current = estadoCuentaFile.name;
+    analizarDocumento();
+  }, [estadoCuentaFile, initialAction]);
+
   const updateSuggestion = (id, patch) => {
     setDocumentSuggestions((actual) => actual.map(item => item.id === id ? { ...item, ...patch } : item));
   };
@@ -496,6 +518,44 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     setLoading(false);
   };
 
+  if (initialAction !== 'manual' && !reviewOpen && !estadoCuentaFile) {
+    return (
+      <div className="py-12 animate-in fade-in duration-300">
+        <div className="rounded-[2rem] bg-white border border-zinc-100 p-8 text-center shadow-sm">
+          <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center ${initialAction === 'voice' ? 'bg-emerald-50 text-emerald-600' : 'bg-indigo-50 text-indigo-600'}`}>
+            {initialAction === 'voice' ? <Mic size={28} /> : <Sparkles size={28} />}
+          </div>
+          <h3 className="mt-5 text-xl font-black text-zinc-900">
+            {initialAction === 'voice' ? 'Activando micrófono' : 'Elegí un comprobante'}
+          </h3>
+          <p className="mt-2 text-sm leading-6 text-zinc-500">
+            {initialAction === 'voice'
+              ? 'Decí uno o varios gastos. Después vas a poder revisar todo antes de guardar.'
+              : 'Podés sacar una foto, subir una imagen o elegir un PDF. Después preparamos las sugerencias.'}
+          </p>
+          {initialAction === 'voice' ? (
+            <div className="mt-6 flex items-center justify-center gap-2 text-emerald-600 font-bold text-sm">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Esperando permiso del navegador
+            </div>
+          ) : (
+            <label className="mt-6 w-full p-4 rounded-2xl bg-indigo-600 text-white font-black flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
+              <FileText size={18} /> Subir archivo o foto
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf,image/*"
+                capture="environment"
+                onChange={(e) => setEstadoCuentaFile(e.target.files?.[0] || null)}
+                className="hidden"
+              />
+            </label>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="pt-4 animate-in fade-in duration-500">
       <form onSubmit={handleSubmit} className="flex flex-col h-full">
@@ -542,8 +602,10 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
           <label className={`mt-3 px-4 py-3 rounded-full bg-white border font-bold text-sm flex items-center gap-2 active:scale-95 transition-all shadow-sm cursor-pointer ${initialAction === 'document' ? 'border-indigo-200 text-indigo-700' : 'border-zinc-200 text-zinc-800'}`}>
             <FileText size={18} /> Analizar documento
             <input
+              ref={fileInputRef}
               type="file"
               accept="application/pdf,image/*"
+              capture="environment"
               onChange={(e) => setEstadoCuentaFile(e.target.files?.[0] || null)}
               className="hidden"
             />

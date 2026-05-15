@@ -18,6 +18,8 @@ export default function AdminPanel({ user }) {
   const [admins, setAdmins] = useState([]);
   const [sugerencias, setSugerencias] = useState([]);
   const [categoriaSugerencias, setCategoriaSugerencias] = useState([]);
+  const [productosAgregados, setProductosAgregados] = useState([]);
+  const [productoEdits, setProductoEdits] = useState({});
   const [categoriaNombre, setCategoriaNombre] = useState('');
   const [categoriaTipo, setCategoriaTipo] = useState('general');
   const [subcategoriaPorCategoria, setSubcategoriaPorCategoria] = useState({});
@@ -42,7 +44,10 @@ export default function AdminPanel({ user }) {
     const unsubCategoriaSugerencias = onSnapshot(collection(db, 'categoria_sugerencias'), (snapshot) => {
       setCategoriaSugerencias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-    return () => { unsubCat(); unsubAdmins(); unsubSugerencias(); unsubCategoriaSugerencias(); };
+    const unsubProductos = onSnapshot(collection(db, 'producto_precios_agregados'), (snapshot) => {
+      setProductosAgregados(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => { unsubCat(); unsubAdmins(); unsubSugerencias(); unsubCategoriaSugerencias(); unsubProductos(); };
   }, []);
 
   const categoriasOrdenadas = useMemo(() => (
@@ -228,6 +233,17 @@ export default function AdminPanel({ user }) {
     }
   };
 
+  const guardarProductoCanonico = async (producto) => {
+    const nombre = (productoEdits[producto.id] ?? producto.adminNombreCanonico ?? producto.nombreCanonico ?? '').trim();
+    if (!nombre) return;
+    await updateDoc(doc(db, 'producto_precios_agregados', producto.id), {
+      adminNombreCanonico: nombre,
+      revisadoPorAdmin: true,
+      updatedAt: serverTimestamp(),
+    });
+    setProductoEdits((actual) => ({ ...actual, [producto.id]: '' }));
+  };
+
   return (
     <div className="pt-4 animate-in fade-in duration-500 space-y-8">
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
@@ -242,6 +258,39 @@ export default function AdminPanel({ user }) {
           Actualizar agregados
         </button>
         {priceJobStatus && <p className="mt-3 text-sm font-bold text-zinc-600">{priceJobStatus}</p>}
+      </div>
+
+      <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
+        <div className="flex items-center gap-2 mb-4">
+          <Database size={20} className="text-zinc-700" />
+          <h2 className="text-xl font-bold text-zinc-800">Productos canonizados</h2>
+        </div>
+        <div className="space-y-3">
+          {productosAgregados.length === 0 && (
+            <p className="text-sm text-zinc-400 text-center py-6">Todavía no hay productos agregados.</p>
+          )}
+          {[...productosAgregados]
+            .sort((a, b) => (b.muestras || 0) - (a.muestras || 0))
+            .slice(0, 50)
+            .map(producto => (
+              <div key={producto.id} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">{producto.key}</p>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    value={productoEdits[producto.id] ?? producto.adminNombreCanonico ?? producto.nombreCanonico ?? ''}
+                    onChange={(e) => setProductoEdits((actual) => ({ ...actual, [producto.id]: e.target.value }))}
+                    className="flex-1 p-3 bg-white border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold"
+                  />
+                  <button onClick={() => guardarProductoCanonico(producto)} className="px-4 rounded-xl bg-zinc-900 text-white font-bold">
+                    OK
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-zinc-500">
+                  {producto.muestras || 0} muestras · Promedio {producto.moneda === 'USD' ? 'US$' : '$'}{Number(producto.promedio || 0).toFixed(0)} · {producto.periodo}
+                </p>
+              </div>
+            ))}
+        </div>
       </div>
 
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">

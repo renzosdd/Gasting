@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlertTriangle, BarChart3, CheckCircle2, ChevronDown, FileText, Filter, Mic, Plus, Search, Sparkles } from 'lucide-react';
+import { AlertTriangle, BarChart3, CheckCircle2, Edit3, FileText, Filter, Mic, Plus, Save, Search, Sparkles, Trash2, X } from 'lucide-react';
 import { db } from '../firebase';
+import { getCategoriasFiltradas, getSubcategorias, TIPOS_DESTINO } from '../utils/expenseUtils';
 
 const currentMonth = () => {
   const now = new Date();
@@ -49,6 +50,10 @@ export default function Home({ user, onAddExpense }) {
   const [tarjetas, setTarjetas] = useState([]);
   const [productoPrecios, setProductoPrecios] = useState([]);
   const [productoAgregados, setProductoAgregados] = useState([]);
+  const [categorias, setCategorias] = useState([]);
+  const [categoriasUsuario, setCategoriasUsuario] = useState([]);
+  const [editando, setEditando] = useState(null);
+  const [form, setForm] = useState({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '' });
   const [showCharts, setShowCharts] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState({
@@ -68,6 +73,17 @@ export default function Home({ user, onAddExpense }) {
       setGastos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
     return () => unsubscribe();
+  }, [user.uid]);
+
+  useEffect(() => {
+    const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
+      setCategorias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const sugerenciasQuery = query(collection(db, 'categoria_sugerencias'), where('userId', '==', user.uid));
+    const unsubUserCat = onSnapshot(sugerenciasQuery, (snapshot) => {
+      setCategoriasUsuario(snapshot.docs.map(doc => ({ id: `sugerida-${doc.id}`, ...doc.data(), esSugerida: true })));
+    });
+    return () => { unsubCat(); unsubUserCat(); };
   }, [user.uid]);
 
   useEffect(() => {
@@ -143,12 +159,36 @@ export default function Home({ user, onAddExpense }) {
     const grupos = new Map();
     gastosPeriodo.filter(gasto => (gasto.moneda || 'UYU') === 'UYU').forEach((gasto) => {
       const key = gasto.categoriaGrupo || gasto.categoria || 'Sin categoría';
-      grupos.set(key, (grupos.get(key) || 0) + Number(gasto.monto || 0));
+      const actual = grupos.get(key) || { categoria: key, total: 0, subcategorias: new Map() };
+      const monto = Number(gasto.monto || 0);
+      const subcategoria = gasto.subcategoria || gasto.categoria || 'Sin subcategoría';
+      actual.total += monto;
+      actual.subcategorias.set(subcategoria, (actual.subcategorias.get(subcategoria) || 0) + monto);
+      grupos.set(key, actual);
     });
-    return [...grupos.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return [...grupos.values()]
+      .map(item => ({
+        ...item,
+        subcategorias: [...item.subcategorias.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3),
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5);
   }, [gastosPeriodo]);
 
-  const chartData = porCategoria.map(([categoria, total]) => ({ categoria, total }));
+  const chartData = porCategoria.map(item => ({ categoria: item.categoria, total: item.total }));
+
+  const categoriasDisponibles = useMemo(() => ([
+    ...categorias,
+    ...categoriasUsuario.filter(categoria => categoria.estado !== 'rechazada'),
+  ]), [categorias, categoriasUsuario]);
+
+  const categoriasFiltradas = useMemo(() => (
+    getCategoriasFiltradas(categoriasDisponibles, form.tipoDestino)
+  ), [categoriasDisponibles, form.tipoDestino]);
+
+  const categoriaSeleccionada = categoriasDisponibles.find(categoria => categoria.id === form.categoriaId)
+    || categoriasDisponibles.find(categoria => categoria.nombre === form.categoria);
+  const subcategorias = getSubcategorias(categoriaSeleccionada);
 
   const productoInsights = useMemo(() => {
     const agregadosPorKey = new Map(productoAgregados.map(item => [item.key, item]));
@@ -222,7 +262,6 @@ export default function Home({ user, onAddExpense }) {
       }
     });
 
-    return resultado.slice(0, 4);
     productoInsights.forEach((insight) => {
       resultado.push({
         tipo: 'precio',
@@ -238,11 +277,51 @@ export default function Home({ user, onAddExpense }) {
     await updateDoc(doc(db, 'gastos', gastoId), { estadoRevision: 'confirmado' });
   };
 
+  const empezarEdicion = (gasto) => {
+    setEditando(gasto.id);
+    setForm({
+      monto: gasto.monto || '',
+      moneda: gasto.moneda || 'UYU',
+      tipoDestino: gasto.tipoDestino || 'general',
+      categoriaId: gasto.categoriaId || '',
+      categoria: gasto.categoriaGrupo || '',
+      subcategoria: gasto.subcategoria || gasto.categoria || '',
+    });
+  };
+
+  const cancelarEdicion = () => {
+    setEditando(null);
+    setForm({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '' });
+  };
+
+  const guardarEdicion = async (gasto) => {
+    const categoria = categoriasDisponibles.find(item => item.id === form.categoriaId)
+      || categoriasDisponibles.find(item => item.nombre === form.categoria);
+    const categoriaNombre = categoria?.nombre || form.categoria;
+
+    await updateDoc(doc(db, 'gastos', gasto.id), {
+      monto: Number(form.monto),
+      moneda: form.moneda,
+      tipoDestino: form.tipoDestino,
+      categoriaId: categoria?.id || form.categoriaId || null,
+      categoriaGrupo: categoriaNombre,
+      categoria: form.subcategoria || categoriaNombre,
+      subcategoria: form.subcategoria,
+      estadoRevision: 'confirmado',
+    });
+    cancelarEdicion();
+  };
+
+  const eliminarGasto = async (gasto) => {
+    if (window.confirm('¿Eliminar este gasto?')) {
+      await deleteDoc(doc(db, 'gastos', gasto.id));
+    }
+  };
+
   return (
     <div className="pt-4 animate-in fade-in duration-500 space-y-5">
       <section className="rounded-[2rem] bg-zinc-900 text-white p-5 shadow-xl shadow-zinc-900/10">
-        <div className="flex items-start justify-between gap-4">
-          <div>
+        <div>
             <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Gastado {filters.periodo === 'semana' ? 'esta semana' : 'este mes'}</p>
             <p className="mt-2 text-4xl font-black tracking-tight">
               ${totalUyu.toLocaleString('es-UY', { maximumFractionDigits: 0 })}
@@ -252,14 +331,7 @@ export default function Home({ user, onAddExpense }) {
                 + US${totalUsd.toLocaleString('es-UY', { maximumFractionDigits: 0 })}
               </p>
             )}
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowCharts((actual) => !actual)}
-            className="w-12 h-12 rounded-2xl bg-white/10 text-emerald-300 flex items-center justify-center active:scale-95 transition-all"
-          >
-            <BarChart3 size={22} />
-          </button>
+            <p className="mt-3 text-sm font-bold text-zinc-300">Agregar nuevo gasto</p>
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-2">
@@ -335,8 +407,8 @@ export default function Home({ user, onAddExpense }) {
         <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <h2 className="font-black text-zinc-900">Dónde se está yendo</h2>
-            <button type="button" onClick={() => setShowCharts(!showCharts)} className="inline-flex items-center gap-1 text-xs font-black text-emerald-600">
-              {showCharts ? 'Ocultar gráfico' : 'Ver gráfico'} <ChevronDown size={14} />
+            <button type="button" onClick={() => setShowCharts(!showCharts)} className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <BarChart3 size={18} />
             </button>
           </div>
           {showCharts && (
@@ -353,17 +425,24 @@ export default function Home({ user, onAddExpense }) {
             </div>
           )}
           <div className="mt-4 space-y-3">
-            {porCategoria.map(([categoria, total]) => (
-              <div key={categoria}>
+            {porCategoria.map((item) => (
+              <div key={item.categoria}>
                 <div className="flex items-center justify-between text-sm">
-                  <span className="font-bold text-zinc-700">{categoria}</span>
-                  <span className="font-black text-zinc-900">${total.toLocaleString('es-UY', { maximumFractionDigits: 0 })}</span>
+                  <span className="font-bold text-zinc-700">{item.categoria}</span>
+                  <span className="font-black text-zinc-900">${item.total.toLocaleString('es-UY', { maximumFractionDigits: 0 })}</span>
                 </div>
                 <div className="mt-2 h-2 rounded-full bg-zinc-100 overflow-hidden">
                   <div
                     className="h-full rounded-full bg-emerald-500"
-                    style={{ width: `${Math.min(100, (total / Math.max(totalUyu, 1)) * 100)}%` }}
+                    style={{ width: `${Math.min(100, (item.total / Math.max(totalUyu, 1)) * 100)}%` }}
                   />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {item.subcategorias.map(([nombre, total]) => (
+                    <span key={nombre} className="px-2 py-1 rounded-full bg-zinc-100 text-[11px] font-bold text-zinc-500">
+                      {nombre}: ${total.toLocaleString('es-UY', { maximumFractionDigits: 0 })}
+                    </span>
+                  ))}
                 </div>
               </div>
             ))}
@@ -406,35 +485,80 @@ export default function Home({ user, onAddExpense }) {
 
         {gastosPeriodo.slice(0, 40).map(gasto => (
           <article key={gasto.id} className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="font-black text-zinc-900 truncate">{gasto.subcategoria || gasto.categoria || 'Gasto'}</p>
-                  {gasto.estadoRevision === 'pendiente_revision' && (
-                    <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black shrink-0">Revisar</span>
+            {editando === gasto.id ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="number" value={form.monto} onChange={e => setForm({ ...form, monto: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold" />
+                  <select value={form.moneda} onChange={e => setForm({ ...form, moneda: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
+                    <option value="UYU">Pesos</option>
+                    <option value="USD">Dólares</option>
+                  </select>
+                </div>
+                <select value={form.tipoDestino} onChange={e => setForm({ ...form, tipoDestino: e.target.value, categoriaId: '', categoria: '', subcategoria: '' })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
+                  {TIPOS_DESTINO.map(tipo => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
+                </select>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={categoriaSeleccionada?.id || form.categoriaId}
+                    onChange={e => {
+                      const categoria = categoriasDisponibles.find(item => item.id === e.target.value);
+                      setForm({ ...form, categoriaId: e.target.value, categoria: categoria?.nombre || '', subcategoria: '' });
+                    }}
+                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
+                  >
+                    <option value="">Categoría</option>
+                    {categoriasFiltradas.map(categoria => <option key={categoria.id} value={categoria.id}>{categoria.nombre}{categoria.esSugerida ? ' (tuya)' : ''}</option>)}
+                  </select>
+                  <select
+                    value={form.subcategoria}
+                    onChange={e => setForm({ ...form, subcategoria: e.target.value })}
+                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
+                  >
+                    <option value="">Subcategoría</option>
+                    {subcategorias.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+                    {form.subcategoria && !subcategorias.includes(form.subcategoria) && <option value={form.subcategoria}>{form.subcategoria}</option>}
+                  </select>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => guardarEdicion(gasto)} className="flex-1 p-3 rounded-2xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2"><Save size={18} /> Guardar</button>
+                  <button onClick={cancelarEdicion} className="p-3 rounded-2xl bg-zinc-100 text-zinc-500"><X size={18} /></button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="font-black text-zinc-900 truncate">{gasto.subcategoria || gasto.categoria || 'Gasto'}</p>
+                    {gasto.estadoRevision === 'pendiente_revision' && (
+                      <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black shrink-0">Revisar</span>
+                    )}
+                  </div>
+                  <p className="text-sm font-medium text-zinc-500 truncate">
+                    {gasto.categoriaGrupo || 'Sin categoría'} · {gasto.tipoDestino || 'general'}
+                  </p>
+                  {(gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre) && (
+                    <p className="mt-1 text-xs font-black text-emerald-600 truncate">{gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre}</p>
                   )}
                 </div>
-                <p className="text-sm font-medium text-zinc-500 truncate">
-                  {gasto.categoriaGrupo || 'Sin categoría'} · {gasto.tipoDestino || 'general'}
-                </p>
-                {(gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre) && (
-                  <p className="mt-1 text-xs font-black text-emerald-600 truncate">{gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre}</p>
-                )}
+                <div className="text-right shrink-0">
+                  <p className="font-black text-zinc-900">{formatMoney(gasto)}</p>
+                  <p className="text-xs font-bold text-zinc-400">{formatDate(gasto.fecha)}</p>
+                  <div className="mt-2 flex justify-end gap-1">
+                    {gasto.estadoRevision === 'pendiente_revision' && (
+                      <button
+                        type="button"
+                        onClick={() => confirmarGasto(gasto.id)}
+                        className="inline-flex items-center gap-1 text-xs font-black text-emerald-600"
+                      >
+                        <CheckCircle2 size={14} /> OK
+                      </button>
+                    )}
+                    <button type="button" onClick={() => empezarEdicion(gasto)} className="p-2 rounded-full bg-zinc-50 text-zinc-500"><Edit3 size={15} /></button>
+                    <button type="button" onClick={() => eliminarGasto(gasto)} className="p-2 rounded-full bg-red-50 text-red-500"><Trash2 size={15} /></button>
+                  </div>
+                </div>
               </div>
-              <div className="text-right shrink-0">
-                <p className="font-black text-zinc-900">{formatMoney(gasto)}</p>
-                <p className="text-xs font-bold text-zinc-400">{formatDate(gasto.fecha)}</p>
-                {gasto.estadoRevision === 'pendiente_revision' && (
-                  <button
-                    type="button"
-                    onClick={() => confirmarGasto(gasto.id)}
-                    className="mt-2 inline-flex items-center gap-1 text-xs font-black text-emerald-600"
-                  >
-                    <CheckCircle2 size={14} /> OK
-                  </button>
-                )}
-              </div>
-            </div>
+            )}
           </article>
         ))}
       </section>
