@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
-import { GitMerge, Plus, Shield, Trash2 } from 'lucide-react';
+import { Database, GitMerge, Plus, Shield, Trash2 } from 'lucide-react';
 import { getSubcategoriaNombre, normalizar } from '../utils/expenseUtils';
 
 const TIPOS_DESTINO = [
@@ -13,7 +13,7 @@ const TIPOS_DESTINO = [
 
 const normalizarEmail = (email) => email.trim().toLowerCase();
 
-export default function AdminPanel() {
+export default function AdminPanel({ user }) {
   const [categorias, setCategorias] = useState([]);
   const [admins, setAdmins] = useState([]);
   const [sugerencias, setSugerencias] = useState([]);
@@ -27,6 +27,7 @@ export default function AdminPanel() {
   const [mergeSubCategoriaId, setMergeSubCategoriaId] = useState('');
   const [mergeSubOrigen, setMergeSubOrigen] = useState('');
   const [mergeSubDestino, setMergeSubDestino] = useState('');
+  const [priceJobStatus, setPriceJobStatus] = useState('');
 
   useEffect(() => {
     const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
@@ -211,8 +212,38 @@ export default function AdminPanel() {
     }
   };
 
+  const actualizarPreciosAgregados = async () => {
+    setPriceJobStatus('Procesando precios...');
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch('/.netlify/functions/aggregate-product-prices', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo actualizar.');
+      setPriceJobStatus(`Listo: ${data.agregados} agregados con ${data.procesados} precios procesados.`);
+    } catch (error) {
+      setPriceJobStatus(error.message || 'No se pudo actualizar.');
+    }
+  };
+
   return (
     <div className="pt-4 animate-in fade-in duration-500 space-y-8">
+      <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
+        <div className="flex items-center gap-2 mb-4">
+          <Database size={20} className="text-indigo-600" />
+          <h2 className="text-xl font-bold text-zinc-800">Precios de supermercado</h2>
+        </div>
+        <p className="text-sm text-zinc-500 leading-6 mb-4">
+          Agrupa precios de tickets en estadísticas anónimas. Solo publica productos con mínimo de muestras para evitar identificar compras individuales.
+        </p>
+        <button onClick={actualizarPreciosAgregados} className="w-full p-3 rounded-xl bg-indigo-600 text-white font-bold">
+          Actualizar agregados
+        </button>
+        {priceJobStatus && <p className="mt-3 text-sm font-bold text-zinc-600">{priceJobStatus}</p>}
+      </div>
+
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
         <div className="flex items-center gap-2 mb-4">
           <GitMerge size={20} className="text-emerald-600" />

@@ -3,7 +3,7 @@ import { db } from '../firebase';
 import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { CarFront, CreditCard, FileText, Home, Mic, Plus, Sparkles, Wallet, X } from 'lucide-react';
 import { extractTextFromDocument } from '../utils/localOcr';
-import { getSubcategoriaNombre, normalizar, normalizarProducto, suggestionToExpensePayload } from '../utils/expenseUtils';
+import { canonicalProductKey, getSubcategoriaNombre, normalizar, normalizarProducto, suggestionToExpensePayload } from '../utils/expenseUtils';
 
 const TIPOS_DESTINO = [
   { id: 'general', label: 'General', icon: Wallet },
@@ -396,11 +396,13 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
       productosConfiables.forEach((producto) => {
         const productoRef = doc(collection(db, 'producto_precios'));
         const nombreNormalizado = normalizarProducto(producto.nombre);
+        const productoKey = canonicalProductKey(producto.nombre, producto.marca, producto.unidad);
         batch.set(productoRef, {
           userId: user.uid,
           gastoId: gastoRef.id,
           nombre: producto.nombre,
           nombreNormalizado,
+          productoKey,
           marca: producto.marca || '',
           cantidad: Number(producto.cantidad || 1),
           unidad: producto.unidad || 'unidad',

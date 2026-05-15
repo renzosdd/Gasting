@@ -13,6 +13,21 @@ export const normalizarProducto = (valor = '') => normalizar(valor)
   .replace(/\s+/g, ' ')
   .trim();
 
+export const canonicalProductKey = (nombre = '', marca = '', unidad = '') => {
+  const text = normalizar(`${marca} ${nombre}`)
+    .replace(/coca[\s-]?cola|coca cola|coca/g, 'coca cola')
+    .replace(/(\d+)[,.](\d+)\s*(l|lt|lts|litro|litros)\b/g, '$1.$2 l')
+    .replace(/(\d+)\s*(cc|ml)\b/g, (_, amount) => `${Number(amount) / 1000} l`)
+    .replace(/(\d+)\s*(kg|kilo|kilos)\b/g, '$1 kg')
+    .replace(/(\d+)\s*(g|gr|gramos)\b/g, '$1 g')
+    .replace(/[^a-z0-9.\s]/g, ' ')
+    .replace(/\b(un|una|el|la|los|las|de|del|x|pack)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return `${text}|${unidad || 'unidad'}`;
+};
+
 export const getSubcategoriaNombre = (subcategoria) => (
   typeof subcategoria === 'string' ? subcategoria : subcategoria?.nombre || ''
 );

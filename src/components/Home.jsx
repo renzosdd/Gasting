@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
-import { AlertTriangle, BarChart3, CheckCircle2, FileText, Mic, Plus, Sparkles } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { AlertTriangle, BarChart3, CheckCircle2, ChevronDown, FileText, Filter, Mic, Plus, Search, Sparkles } from 'lucide-react';
 import { db } from '../firebase';
 
 const currentMonth = () => {
@@ -8,10 +9,25 @@ const currentMonth = () => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 };
 
+const currentWeek = () => {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), 0, 1);
+  const days = Math.floor((now - first) / 86400000);
+  return `${now.getFullYear()}-W${String(Math.ceil((days + first.getDay() + 1) / 7)).padStart(2, '0')}`;
+};
+
 const expenseMonth = (gasto) => {
   const date = gasto.fecha?.toDate?.();
   if (!date) return '';
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const expenseWeek = (gasto) => {
+  const date = gasto.fecha?.toDate?.();
+  if (!date) return '';
+  const first = new Date(date.getFullYear(), 0, 1);
+  const days = Math.floor((date - first) / 86400000);
+  return `${date.getFullYear()}-W${String(Math.ceil((days + first.getDay() + 1) / 7)).padStart(2, '0')}`;
 };
 
 const formatDate = (fecha) => {
@@ -26,12 +42,25 @@ const formatMoney = (gasto) => {
   return `${prefix}${Number(gasto.monto || 0).toLocaleString('es-UY', { maximumFractionDigits: 2 })}`;
 };
 
-export default function Home({ user, onAddExpense, onOpenReports }) {
+export default function Home({ user, onAddExpense }) {
   const [gastos, setGastos] = useState([]);
   const [presupuestos, setPresupuestos] = useState([]);
   const [hogares, setHogares] = useState([]);
   const [tarjetas, setTarjetas] = useState([]);
+  const [productoPrecios, setProductoPrecios] = useState([]);
+  const [productoAgregados, setProductoAgregados] = useState([]);
+  const [showCharts, setShowCharts] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState({
+    periodo: 'mes',
+    mes: currentMonth(),
+    moneda: 'todas',
+    tipoDestino: 'todos',
+    estadoRevision: 'todos',
+    texto: '',
+  });
   const mesActual = currentMonth();
+  const semanaActual = currentWeek();
 
   useEffect(() => {
     const q = query(collection(db, 'gastos'), where('userId', '==', user.uid));
@@ -39,6 +68,18 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
       setGastos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
     return () => unsubscribe();
+  }, [user.uid]);
+
+  useEffect(() => {
+    const preciosQuery = query(collection(db, 'producto_precios'), where('userId', '==', user.uid));
+    const agregadosQuery = query(collection(db, 'producto_precios_agregados'));
+    const unsubPrecios = onSnapshot(preciosQuery, (snapshot) => {
+      setProductoPrecios(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubAgregados = onSnapshot(agregadosQuery, (snapshot) => {
+      setProductoAgregados(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => { unsubPrecios(); unsubAgregados(); };
   }, [user.uid]);
 
   useEffect(() => {
@@ -68,32 +109,73 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
     return () => { unsubPresupuestos(); unsubHogares(); unsubHogaresCompartidos(); unsubTarjetas(); };
   }, [user.email, user.uid]);
 
-  const gastosMes = useMemo(() => (
+  const gastosPeriodo = useMemo(() => (
     gastos
-      .filter(gasto => expenseMonth(gasto) === mesActual)
+      .filter(gasto => filters.periodo === 'semana' ? expenseWeek(gasto) === semanaActual : expenseMonth(gasto) === filters.mes)
+      .filter(gasto => filters.moneda === 'todas' || (gasto.moneda || 'UYU') === filters.moneda)
+      .filter(gasto => filters.tipoDestino === 'todos' || (gasto.tipoDestino || 'general') === filters.tipoDestino)
+      .filter(gasto => filters.estadoRevision === 'todos' || (gasto.estadoRevision || 'confirmado') === filters.estadoRevision)
+      .filter(gasto => {
+        const texto = filters.texto.trim().toLowerCase();
+        if (!texto) return true;
+        return `${gasto.categoriaGrupo || ''} ${gasto.subcategoria || ''} ${gasto.categoria || ''} ${gasto.detalles?.descripcion || ''}`.toLowerCase().includes(texto);
+      })
       .sort((a, b) => (b.fecha?.seconds || 0) - (a.fecha?.seconds || 0))
+  ), [filters, gastos, semanaActual]);
+
+  const gastosMes = useMemo(() => (
+    gastos.filter(gasto => expenseMonth(gasto) === mesActual)
   ), [gastos, mesActual]);
 
   const totalUyu = useMemo(() => (
-    gastosMes
+    gastosPeriodo
       .filter(gasto => (gasto.moneda || 'UYU') === 'UYU')
       .reduce((total, gasto) => total + Number(gasto.monto || 0), 0)
-  ), [gastosMes]);
+  ), [gastosPeriodo]);
 
   const totalUsd = useMemo(() => (
-    gastosMes
+    gastosPeriodo
       .filter(gasto => gasto.moneda === 'USD')
       .reduce((total, gasto) => total + Number(gasto.monto || 0), 0)
-  ), [gastosMes]);
+  ), [gastosPeriodo]);
 
   const porCategoria = useMemo(() => {
     const grupos = new Map();
-    gastosMes.filter(gasto => (gasto.moneda || 'UYU') === 'UYU').forEach((gasto) => {
+    gastosPeriodo.filter(gasto => (gasto.moneda || 'UYU') === 'UYU').forEach((gasto) => {
       const key = gasto.categoriaGrupo || gasto.categoria || 'Sin categoría';
       grupos.set(key, (grupos.get(key) || 0) + Number(gasto.monto || 0));
     });
     return [...grupos.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
-  }, [gastosMes]);
+  }, [gastosPeriodo]);
+
+  const chartData = porCategoria.map(([categoria, total]) => ({ categoria, total }));
+
+  const productoInsights = useMemo(() => {
+    const agregadosPorKey = new Map(productoAgregados.map(item => [item.key, item]));
+    return productoPrecios
+      .filter(item => item.productoKey && Number(item.precioUnitario || 0) > 0)
+      .map(item => {
+        const agregado = agregadosPorKey.get(item.productoKey);
+        if (!agregado || Number(agregado.muestras || 0) < Number(agregado.minMuestras || 5)) return null;
+        const promedio = Number(agregado.promedio || 0);
+        const precio = Number(item.precioUnitario || 0);
+        if (!promedio) return null;
+        const diff = ((precio - promedio) / promedio) * 100;
+        if (Math.abs(diff) < 12) return null;
+        return {
+          id: item.id,
+          nombre: item.nombre,
+          diff,
+          precio,
+          promedio,
+          muestras: agregado.muestras,
+          moneda: item.moneda || 'UYU',
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))
+      .slice(0, 3);
+  }, [productoAgregados, productoPrecios]);
 
   const alertas = useMemo(() => {
     const resultado = [];
@@ -107,7 +189,10 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
     }
 
     presupuestos.forEach((presupuesto) => {
-      const gastado = gastosMes
+      const base = presupuesto.periodo === 'semanal'
+        ? gastos.filter(gasto => expenseWeek(gasto) === semanaActual)
+        : gastosMes;
+      const gastado = base
         .filter(gasto => (gasto.moneda || 'UYU') === (presupuesto.moneda || 'UYU'))
         .filter(gasto => !presupuesto.categoriaGrupo || gasto.categoriaGrupo === presupuesto.categoriaGrupo)
         .filter(gasto => !presupuesto.subcategoria || gasto.subcategoria === presupuesto.subcategoria)
@@ -138,7 +223,16 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
     });
 
     return resultado.slice(0, 4);
-  }, [gastosMes, hogares, presupuestos, tarjetas]);
+    productoInsights.forEach((insight) => {
+      resultado.push({
+        tipo: 'precio',
+        titulo: `${insight.nombre} está ${Math.abs(Math.round(insight.diff))}% ${insight.diff > 0 ? 'más caro' : 'más barato'} que el promedio`,
+        texto: `${insight.moneda === 'USD' ? 'US$' : '$'}${insight.precio.toFixed(0)} vs promedio ${insight.moneda === 'USD' ? 'US$' : '$'}${insight.promedio.toFixed(0)} (${insight.muestras} muestras).`,
+      });
+    });
+
+    return resultado.slice(0, 6);
+  }, [gastos, gastosMes, hogares, presupuestos, productoInsights, semanaActual, tarjetas]);
 
   const confirmarGasto = async (gastoId) => {
     await updateDoc(doc(db, 'gastos', gastoId), { estadoRevision: 'confirmado' });
@@ -149,7 +243,7 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
       <section className="rounded-[2rem] bg-zinc-900 text-white p-5 shadow-xl shadow-zinc-900/10">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Gastado este mes</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Gastado {filters.periodo === 'semana' ? 'esta semana' : 'este mes'}</p>
             <p className="mt-2 text-4xl font-black tracking-tight">
               ${totalUyu.toLocaleString('es-UY', { maximumFractionDigits: 0 })}
             </p>
@@ -161,7 +255,7 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
           </div>
           <button
             type="button"
-            onClick={onOpenReports}
+            onClick={() => setShowCharts((actual) => !actual)}
             className="w-12 h-12 rounded-2xl bg-white/10 text-emerald-300 flex items-center justify-center active:scale-95 transition-all"
           >
             <BarChart3 size={22} />
@@ -184,12 +278,80 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
         </div>
       </section>
 
+      <section className="rounded-[2rem] bg-white border border-zinc-100 p-4 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="flex-1 relative">
+            <Search size={17} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+            <input
+              value={filters.texto}
+              onChange={(e) => setFilters((actual) => ({ ...actual, texto: e.target.value }))}
+              placeholder="Buscar gasto..."
+              className="w-full pl-9 pr-3 py-3 rounded-2xl bg-zinc-50 border border-zinc-100 outline-none font-medium text-sm"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowFilters(!showFilters)}
+            className="w-12 h-12 rounded-2xl bg-zinc-900 text-white flex items-center justify-center"
+          >
+            <Filter size={18} />
+          </button>
+        </div>
+
+        {showFilters && (
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <select value={filters.periodo} onChange={(e) => setFilters((actual) => ({ ...actual, periodo: e.target.value }))} className="p-3 rounded-2xl bg-zinc-50 border border-zinc-100 text-sm font-bold outline-none">
+              <option value="mes">Este mes</option>
+              <option value="semana">Esta semana</option>
+            </select>
+            <input
+              type="month"
+              value={filters.mes}
+              onChange={(e) => setFilters((actual) => ({ ...actual, mes: e.target.value, periodo: 'mes' }))}
+              className="p-3 rounded-2xl bg-zinc-50 border border-zinc-100 text-sm font-bold outline-none"
+            />
+            <select value={filters.moneda} onChange={(e) => setFilters((actual) => ({ ...actual, moneda: e.target.value }))} className="p-3 rounded-2xl bg-zinc-50 border border-zinc-100 text-sm font-bold outline-none">
+              <option value="todas">Todas las monedas</option>
+              <option value="UYU">Pesos</option>
+              <option value="USD">Dólares</option>
+            </select>
+            <select value={filters.tipoDestino} onChange={(e) => setFilters((actual) => ({ ...actual, tipoDestino: e.target.value }))} className="p-3 rounded-2xl bg-zinc-50 border border-zinc-100 text-sm font-bold outline-none">
+              <option value="todos">Todos los tipos</option>
+              <option value="general">General</option>
+              <option value="vehiculo">Vehículo</option>
+              <option value="hogar">Casa</option>
+              <option value="tarjeta">Tarjeta</option>
+            </select>
+            <select value={filters.estadoRevision} onChange={(e) => setFilters((actual) => ({ ...actual, estadoRevision: e.target.value }))} className="p-3 rounded-2xl bg-zinc-50 border border-zinc-100 text-sm font-bold outline-none">
+              <option value="todos">Todos los estados</option>
+              <option value="confirmado">Confirmados</option>
+              <option value="pendiente_revision">Pendientes</option>
+            </select>
+          </div>
+        )}
+      </section>
+
       {porCategoria.length > 0 && (
         <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <h2 className="font-black text-zinc-900">Dónde se está yendo</h2>
-            <button type="button" onClick={onOpenReports} className="text-xs font-black text-emerald-600">Ver más</button>
+            <button type="button" onClick={() => setShowCharts(!showCharts)} className="inline-flex items-center gap-1 text-xs font-black text-emerald-600">
+              {showCharts ? 'Ocultar gráfico' : 'Ver gráfico'} <ChevronDown size={14} />
+            </button>
           </div>
+          {showCharts && (
+            <div className="mt-4 h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="categoria" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(value) => `$${Number(value).toLocaleString('es-UY')}`} />
+                  <Bar dataKey="total" fill="#10b981" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
           <div className="mt-4 space-y-3">
             {porCategoria.map(([categoria, total]) => (
               <div key={categoria}>
@@ -230,11 +392,11 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
         <div className="flex items-end justify-between">
           <div>
             <h2 className="text-xl font-black text-zinc-900">Últimos gastos</h2>
-            <p className="text-sm font-medium text-zinc-500">{gastosMes.length} registros este mes</p>
+            <p className="text-sm font-medium text-zinc-500">{gastosPeriodo.length} registros</p>
           </div>
         </div>
 
-        {gastosMes.length === 0 && (
+        {gastosPeriodo.length === 0 && (
           <div className="rounded-[2rem] bg-white border border-zinc-100 p-8 text-center">
             <FileText size={28} className="mx-auto text-zinc-300" />
             <p className="mt-3 font-black text-zinc-800">Todavía no cargaste gastos este mes.</p>
@@ -242,7 +404,7 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
           </div>
         )}
 
-        {gastosMes.slice(0, 12).map(gasto => (
+        {gastosPeriodo.slice(0, 40).map(gasto => (
           <article key={gasto.id} className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">

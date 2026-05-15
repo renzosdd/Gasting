@@ -9,7 +9,7 @@ const EMPTY_VEHICULO = { nombre: '', marca: '', modelo: '', anio: '', tipo_motor
 const EMPTY_HOGAR = { nombre: '', direccion: '', fotoUrl: '', servicios: [], miembrosEmails: '' };
 const EMPTY_TARJETA = { nombre: '', banco: '', marca: 'Visa', ultimos4: '', diaCierre: '', diaVencimiento: '' };
 const EMPTY_SERVICIO = { nombre: '', numeroCuenta: '', diaPago: '', proveedor: '' };
-const EMPTY_PRESUPUESTO = { nombre: '', monto: '', moneda: 'UYU', hogarId: '', categoriaGrupo: '', subcategoria: '' };
+const EMPTY_PRESUPUESTO = { nombre: '', monto: '', moneda: 'UYU', hogarId: '', categoriaGrupo: '', subcategoria: '', periodo: 'mensual' };
 
 const compressImage = (file, maxSize = 900, quality = 0.72) => new Promise((resolve, reject) => {
   const image = new Image();
@@ -243,7 +243,7 @@ export default function EntitiesManager({ user }) {
       hogarNombre: hogar?.nombre || '',
       categoriaGrupo: formPresupuesto.categoriaGrupo || '',
       subcategoria: formPresupuesto.subcategoria || '',
-      periodo: 'mensual',
+      periodo: formPresupuesto.periodo || 'mensual',
       updatedAt: serverTimestamp(),
     };
 
@@ -265,6 +265,7 @@ export default function EntitiesManager({ user }) {
       hogarId: presupuesto.hogarId || '',
       categoriaGrupo: presupuesto.categoriaGrupo || '',
       subcategoria: presupuesto.subcategoria || '',
+      periodo: presupuesto.periodo || 'mensual',
     });
   };
 
@@ -473,7 +474,7 @@ export default function EntitiesManager({ user }) {
               <div className="flex-1 min-w-0">
                 <h3 className="text-lg font-bold text-zinc-800 leading-tight">{presupuesto.nombre}</h3>
                 <p className="text-sm text-zinc-500">{presupuesto.categoriaGrupo || 'Todas las categorías'}{presupuesto.subcategoria ? ` · ${presupuesto.subcategoria}` : ''}</p>
-                <p className="text-xs font-bold text-zinc-600 mt-1">{presupuesto.moneda === 'USD' ? 'US$' : '$'}{Number(presupuesto.monto || 0).toLocaleString('es-UY')} mensual {presupuesto.hogarNombre ? `· ${presupuesto.hogarNombre}` : ''}</p>
+                <p className="text-xs font-bold text-zinc-600 mt-1">{presupuesto.moneda === 'USD' ? 'US$' : '$'}{Number(presupuesto.monto || 0).toLocaleString('es-UY')} {presupuesto.periodo === 'semanal' ? 'semanal' : 'mensual'} {presupuesto.hogarNombre ? `· ${presupuesto.hogarNombre}` : ''}</p>
               </div>
               <div className="flex flex-col gap-2">
                 <button onClick={() => editarPresupuesto(presupuesto)} className="p-3 rounded-full bg-zinc-50 text-zinc-500"><Edit3 size={18} /></button>
@@ -499,6 +500,10 @@ export default function EntitiesManager({ user }) {
               <select value={formPresupuesto.hogarId} onChange={e => setFormPresupuesto({ ...formPresupuesto, hogarId: e.target.value })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
                 <option value="">Personal / todos mis gastos</option>
                 {hogares.map(hogar => <option key={hogar.id} value={hogar.id}>{hogar.nombre}</option>)}
+              </select>
+              <select value={formPresupuesto.periodo} onChange={e => setFormPresupuesto({ ...formPresupuesto, periodo: e.target.value })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
+                <option value="mensual">Mensual</option>
+                <option value="semanal">Semanal</option>
               </select>
               <select value={formPresupuesto.categoriaGrupo} onChange={e => setFormPresupuesto({ ...formPresupuesto, categoriaGrupo: e.target.value, subcategoria: '' })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
                 <option value="">Todas las categorías</option>

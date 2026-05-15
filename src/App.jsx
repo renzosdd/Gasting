@@ -95,13 +95,12 @@ function App() {
           <Home
             user={user}
             onAddExpense={(mode) => setExpenseModal(mode)}
-            onOpenReports={() => setVistaActiva('dashboard')}
           />
         )}
         {vistaActiva === 'dashboard' && <Dashboard user={user} />}
         {vistaActiva === 'history' && <ExpenseHistory user={user} />}
         {vistaActiva === 'profile' && <EntitiesManager user={user} />}
-        {vistaActiva === 'admin' && isAdmin && <AdminPanel />}
+        {vistaActiva === 'admin' && isAdmin && <AdminPanel user={user} />}
       </main>
 
       {expenseModal && (
