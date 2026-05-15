@@ -98,14 +98,14 @@ Devuelve solo JSON válido con este shape:
 ${JSON.stringify(JSON_SCHEMA)}
 `;
 
-    const openaiResponse = await fetch('https://api.openai.com/v1/responses', {
+    const callOpenAI = (model) => fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || 'gpt-5-nano',
+        model,
         input: [
           {
             role: 'user',
@@ -126,7 +126,15 @@ ${JSON.stringify(JSON_SCHEMA)}
       }),
     });
 
-    const data = await openaiResponse.json();
+    const primaryModel = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    const fallbackModel = process.env.OPENAI_FALLBACK_MODEL || 'gpt-4o-mini';
+    let openaiResponse = await callOpenAI(primaryModel);
+    let data = await openaiResponse.json();
+
+    if (!openaiResponse.ok && primaryModel !== fallbackModel && /model|access|does not have access/i.test(data.error?.message || '')) {
+      openaiResponse = await callOpenAI(fallbackModel);
+      data = await openaiResponse.json();
+    }
 
     if (!openaiResponse.ok) {
       return {
