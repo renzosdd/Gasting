@@ -26,6 +26,7 @@ export const findCategoriaByName = (categorias, nombre) => (
 export const suggestionToExpensePayload = ({ sugerencia, userId, categorias, sourceFileName = '' }) => {
   const categoria = findCategoriaByName(categorias, sugerencia.categoriaGrupo);
   const categoriaNombre = categoria?.nombre || sugerencia.categoriaGrupo || 'Sin categoría';
+  const origen = sugerencia.source === 'voz' ? 'voz_ia' : 'documento_ia';
 
   return {
     userId,
@@ -40,12 +41,12 @@ export const suggestionToExpensePayload = ({ sugerencia, userId, categorias, sou
       descripcion: sugerencia.descripcion || '',
       notas: sugerencia.notas || '',
       confianza: Number(sugerencia.confianza || 0),
-      fuente: 'documento_ia',
+      fuente: origen,
     },
-    estadoCuenta: {
+    estadoCuenta: sourceFileName ? {
       nombre: sourceFileName,
       estado: 'analizado_sin_storage',
-    },
-    origen: 'documento_ia',
+    } : null,
+    origen,
   };
 };

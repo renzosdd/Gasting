@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
-import { Plus, Shield, Trash2 } from 'lucide-react';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { GitMerge, Plus, Shield, Trash2 } from 'lucide-react';
+import { getSubcategoriaNombre, normalizar } from '../utils/expenseUtils';
 
 const TIPOS_DESTINO = [
   { id: 'general', label: 'General' },
@@ -21,6 +22,11 @@ export default function AdminPanel() {
   const [categoriaTipo, setCategoriaTipo] = useState('general');
   const [subcategoriaPorCategoria, setSubcategoriaPorCategoria] = useState({});
   const [nuevoAdmin, setNuevoAdmin] = useState('');
+  const [mergeCategoriaOrigen, setMergeCategoriaOrigen] = useState('');
+  const [mergeCategoriaDestino, setMergeCategoriaDestino] = useState('');
+  const [mergeSubCategoriaId, setMergeSubCategoriaId] = useState('');
+  const [mergeSubOrigen, setMergeSubOrigen] = useState('');
+  const [mergeSubDestino, setMergeSubDestino] = useState('');
 
   useEffect(() => {
     const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
@@ -39,8 +45,30 @@ export default function AdminPanel() {
   }, []);
 
   const categoriasOrdenadas = useMemo(() => (
-    [...categorias].sort((a, b) => `${a.tipoDestino || 'general'}-${a.nombre}`.localeCompare(`${b.tipoDestino || 'general'}-${b.nombre}`))
+    categorias
+      .filter(categoria => !categoria.mergedInto)
+      .sort((a, b) => `${a.tipoDestino || 'general'}-${a.nombre}`.localeCompare(`${b.tipoDestino || 'general'}-${b.nombre}`))
   ), [categorias]);
+
+  const categoriasParecidas = useMemo(() => {
+    const grupos = new Map();
+    categoriasOrdenadas.forEach((categoria) => {
+      const key = `${categoria.tipoDestino || 'general'}:${normalizar(categoria.nombre).replace(/\s+/g, ' ').trim()}`;
+      const existentes = grupos.get(key) || [];
+      grupos.set(key, [...existentes, categoria]);
+    });
+    return [...grupos.values()].filter(grupo => grupo.length > 1);
+  }, [categoriasOrdenadas]);
+
+  const categoriaSubMerge = useMemo(() => (
+    categoriasOrdenadas.find(categoria => categoria.id === mergeSubCategoriaId)
+  ), [categoriasOrdenadas, mergeSubCategoriaId]);
+
+  const subcategoriasMerge = useMemo(() => (
+    Array.isArray(categoriaSubMerge?.subcategorias)
+      ? categoriaSubMerge.subcategorias.map(getSubcategoriaNombre).filter(Boolean)
+      : []
+  ), [categoriaSubMerge]);
 
   const handleAddCategoria = async () => {
     const nombre = categoriaNombre.trim();
@@ -63,7 +91,7 @@ export default function AdminPanel() {
     if (!nombre) return;
 
     const subcategorias = Array.isArray(categoria.subcategorias) ? categoria.subcategorias : [];
-    const existe = subcategorias.some(sub => (typeof sub === 'string' ? sub : sub.nombre) === nombre);
+    const existe = subcategorias.some(sub => normalizar(getSubcategoriaNombre(sub)) === normalizar(nombre));
     if (existe) return;
 
     try {
@@ -78,7 +106,7 @@ export default function AdminPanel() {
 
   const handleDeleteSubcategoria = async (categoria, subcategoriaNombre) => {
     const subcategorias = Array.isArray(categoria.subcategorias) ? categoria.subcategorias : [];
-    const nuevas = subcategorias.filter(sub => (typeof sub === 'string' ? sub : sub.nombre) !== subcategoriaNombre);
+    const nuevas = subcategorias.filter(sub => getSubcategoriaNombre(sub) !== subcategoriaNombre);
     await updateDoc(doc(db, 'categorias', categoria.id), { subcategorias: nuevas });
   };
 
@@ -87,7 +115,7 @@ export default function AdminPanel() {
     if (!categoria) return;
 
     const subcategorias = Array.isArray(categoria.subcategorias) ? categoria.subcategorias : [];
-    const existe = subcategorias.some(sub => (typeof sub === 'string' ? sub : sub.nombre) === sugerencia.nombre);
+    const existe = subcategorias.some(sub => normalizar(getSubcategoriaNombre(sub)) === normalizar(sugerencia.nombre));
 
     if (!existe) {
       await updateDoc(doc(db, 'categorias', categoria.id), {
@@ -123,8 +151,164 @@ export default function AdminPanel() {
     }
   };
 
+  const mergeCategorias = async () => {
+    if (!mergeCategoriaOrigen || !mergeCategoriaDestino || mergeCategoriaOrigen === mergeCategoriaDestino) return;
+
+    const origen = categoriasOrdenadas.find(categoria => categoria.id === mergeCategoriaOrigen);
+    const destino = categoriasOrdenadas.find(categoria => categoria.id === mergeCategoriaDestino);
+    if (!origen || !destino) return;
+
+    const subcategoriasDestino = Array.isArray(destino.subcategorias) ? destino.subcategorias : [];
+    const subcategoriasOrigen = Array.isArray(origen.subcategorias) ? origen.subcategorias : [];
+    const nombresDestino = new Set(subcategoriasDestino.map(sub => normalizar(getSubcategoriaNombre(sub))));
+    const subcategoriasUnificadas = [
+      ...subcategoriasDestino,
+      ...subcategoriasOrigen.filter(sub => {
+        const nombre = normalizar(getSubcategoriaNombre(sub));
+        if (!nombre || nombresDestino.has(nombre)) return false;
+        nombresDestino.add(nombre);
+        return true;
+      }),
+    ];
+
+    try {
+      await updateDoc(doc(db, 'categorias', destino.id), {
+        subcategorias: subcategoriasUnificadas,
+        updatedAt: serverTimestamp(),
+      });
+      await updateDoc(doc(db, 'categorias', origen.id), {
+        mergedInto: destino.id,
+        mergedIntoNombre: destino.nombre,
+        mergedAt: serverTimestamp(),
+      });
+      setMergeCategoriaOrigen('');
+      setMergeCategoriaDestino('');
+    } catch (error) {
+      alert('Error al unificar categorías: ' + error.message);
+    }
+  };
+
+  const mergeSubcategorias = async () => {
+    if (!categoriaSubMerge || !mergeSubOrigen || !mergeSubDestino || mergeSubOrigen === mergeSubDestino) return;
+
+    const subcategorias = Array.isArray(categoriaSubMerge.subcategorias) ? categoriaSubMerge.subcategorias : [];
+    const destinoExiste = subcategorias.some(sub => normalizar(getSubcategoriaNombre(sub)) === normalizar(mergeSubDestino));
+    const nuevas = subcategorias.filter(sub => normalizar(getSubcategoriaNombre(sub)) !== normalizar(mergeSubOrigen));
+
+    if (!destinoExiste) {
+      nuevas.push({ nombre: mergeSubDestino, fija: false });
+    }
+
+    try {
+      await updateDoc(doc(db, 'categorias', categoriaSubMerge.id), {
+        subcategorias: nuevas,
+        updatedAt: serverTimestamp(),
+      });
+      setMergeSubOrigen('');
+      setMergeSubDestino('');
+    } catch (error) {
+      alert('Error al unificar subcategorías: ' + error.message);
+    }
+  };
+
   return (
     <div className="pt-4 animate-in fade-in duration-500 space-y-8">
+      <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
+        <div className="flex items-center gap-2 mb-4">
+          <GitMerge size={20} className="text-emerald-600" />
+          <h2 className="text-xl font-bold text-zinc-800">Unificar duplicados</h2>
+        </div>
+
+        {categoriasParecidas.length > 0 && (
+          <div className="mb-5 rounded-2xl bg-amber-50 border border-amber-100 p-4">
+            <p className="text-xs font-bold uppercase tracking-wider text-amber-700 mb-2">Posibles duplicados</p>
+            <div className="space-y-1">
+              {categoriasParecidas.map((grupo) => (
+                <p key={grupo.map(item => item.id).join('-')} className="text-sm text-amber-900">
+                  {grupo.map(item => item.nombre).join(' / ')} · {grupo[0].tipoDestino || 'general'}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Categorías</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <select
+              value={mergeCategoriaOrigen}
+              onChange={(e) => setMergeCategoriaOrigen(e.target.value)}
+              className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="">Categoría a fusionar</option>
+              {categoriasOrdenadas.map(categoria => (
+                <option key={categoria.id} value={categoria.id}>{categoria.nombre} · {categoria.tipoDestino || 'general'}</option>
+              ))}
+            </select>
+            <select
+              value={mergeCategoriaDestino}
+              onChange={(e) => setMergeCategoriaDestino(e.target.value)}
+              className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="">Categoría final</option>
+              {categoriasOrdenadas.map(categoria => (
+                <option key={categoria.id} value={categoria.id}>{categoria.nombre} · {categoria.tipoDestino || 'general'}</option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={mergeCategorias}
+            disabled={!mergeCategoriaOrigen || !mergeCategoriaDestino || mergeCategoriaOrigen === mergeCategoriaDestino}
+            className="w-full p-3 rounded-xl bg-zinc-900 text-white font-bold disabled:opacity-40"
+          >
+            Unificar categorías
+          </button>
+        </div>
+
+        <div className="space-y-3 mt-6">
+          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Subcategorías</p>
+          <select
+            value={mergeSubCategoriaId}
+            onChange={(e) => {
+              setMergeSubCategoriaId(e.target.value);
+              setMergeSubOrigen('');
+              setMergeSubDestino('');
+            }}
+            className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            <option value="">Elegí una categoría</option>
+            {categoriasOrdenadas.map(categoria => (
+              <option key={categoria.id} value={categoria.id}>{categoria.nombre} · {categoria.tipoDestino || 'general'}</option>
+            ))}
+          </select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <select
+              value={mergeSubOrigen}
+              onChange={(e) => setMergeSubOrigen(e.target.value)}
+              className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="">Subcategoría a fusionar</option>
+              {subcategoriasMerge.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+            </select>
+            <select
+              value={mergeSubDestino}
+              onChange={(e) => setMergeSubDestino(e.target.value)}
+              className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="">Subcategoría final</option>
+              {subcategoriasMerge.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+            </select>
+          </div>
+          <button
+            onClick={mergeSubcategorias}
+            disabled={!mergeSubOrigen || !mergeSubDestino || mergeSubOrigen === mergeSubDestino}
+            className="w-full p-3 rounded-xl bg-zinc-900 text-white font-bold disabled:opacity-40"
+          >
+            Unificar subcategorías
+          </button>
+        </div>
+      </div>
+
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
         <h2 className="text-xl font-bold text-zinc-800 mb-4">Categorías</h2>
         <div className="space-y-3 mb-5">

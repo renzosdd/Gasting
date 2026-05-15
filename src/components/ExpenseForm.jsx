@@ -58,6 +58,10 @@ export default function ExpenseForm({ user }) {
   const [documentSuggestions, setDocumentSuggestions] = useState([]);
   const [selectedSuggestions, setSelectedSuggestions] = useState({});
   const [ocrText, setOcrText] = useState('');
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewMode, setReviewMode] = useState('documento');
+  const [processingReview, setProcessingReview] = useState(false);
+  const [processingLabel, setProcessingLabel] = useState('');
   const [detalles, setDetalles] = useState({});
   const [loading, setLoading] = useState(false);
 
@@ -170,26 +174,34 @@ export default function ExpenseForm({ user }) {
     }
   };
 
-  const interpretarVoz = (texto) => {
+  const buildVoiceSuggestion = (texto) => {
     const limpio = normalizar(texto);
     const montoMatch = limpio.match(/(\d+(?:[.,]\d+)?)/);
-    if (montoMatch) setMonto(montoMatch[1].replace(',', '.'));
-    if (limpio.includes('dolar') || limpio.includes('dolares') || limpio.includes('usd')) setMoneda('USD');
-    if (limpio.includes('peso') || limpio.includes('pesos') || limpio.includes('uruguay')) setMoneda('UYU');
+    const monedaDetectada = limpio.includes('dolar') || limpio.includes('dolares') || limpio.includes('usd') ? 'USD' : 'UYU';
+    let tipoDetectado = 'general';
 
-    if (limpio.includes('auto') || limpio.includes('vehiculo') || limpio.includes('nafta') || limpio.includes('combustible')) setTipoDestino('vehiculo');
-    else if (limpio.includes('casa') || limpio.includes('hogar') || limpio.includes('ute') || limpio.includes('ose')) setTipoDestino('hogar');
-    else if (limpio.includes('tarjeta') || limpio.includes('visa') || limpio.includes('master')) setTipoDestino('tarjeta');
-    else setTipoDestino('general');
+    if (limpio.includes('auto') || limpio.includes('vehiculo') || limpio.includes('nafta') || limpio.includes('combustible')) tipoDetectado = 'vehiculo';
+    else if (limpio.includes('casa') || limpio.includes('hogar') || limpio.includes('ute') || limpio.includes('ose')) tipoDetectado = 'hogar';
+    else if (limpio.includes('tarjeta') || limpio.includes('visa') || limpio.includes('master')) tipoDetectado = 'tarjeta';
 
     const categoriaDetectada = categoriasDisponibles.find(categoria => limpio.includes(normalizar(categoria.nombre)));
-    if (categoriaDetectada) setCategoriaId(categoriaDetectada.id);
-
     const subDetectada = categoriasDisponibles.flatMap(categoria => categoria.subcategorias || []).find(sub => {
       const nombre = getSubcategoriaNombre(sub);
       return nombre && limpio.includes(normalizar(nombre));
     });
-    if (subDetectada) setSubcategoria(getSubcategoriaNombre(subDetectada));
+
+    return {
+      id: `voice-${Date.now()}`,
+      descripcion: texto,
+      monto: montoMatch ? Number(montoMatch[1].replace(',', '.')) : '',
+      moneda: monedaDetectada,
+      tipoDestino: categoriaDetectada?.tipoDestino || tipoDetectado,
+      categoriaGrupo: categoriaDetectada?.nombre || '',
+      subcategoria: subDetectada ? getSubcategoriaNombre(subDetectada) : '',
+      confianza: montoMatch ? 0.78 : 0.55,
+      notas: 'Revisá la categoría y el monto antes de guardar.',
+      source: 'voz',
+    };
   };
 
   const iniciarVoz = () => {
@@ -203,14 +215,34 @@ export default function ExpenseForm({ user }) {
     recognition.lang = 'es-UY';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
-    recognition.onstart = () => setVoiceStatus('Escuchando...');
-    recognition.onerror = () => setVoiceStatus('No pude escuchar bien. Probá de nuevo.');
+    recognition.onstart = () => {
+      setReviewMode('voz');
+      setReviewOpen(true);
+      setProcessingReview(true);
+      setProcessingLabel('Escuchando tu gasto...');
+      setVoiceStatus('');
+      setDocumentSuggestions([]);
+      setSelectedSuggestions({});
+    };
+    recognition.onerror = () => {
+      setProcessingReview(false);
+      setProcessingLabel('');
+      setVoiceStatus('No pude escuchar bien. Probá de nuevo.');
+    };
     recognition.onresult = (event) => {
       const texto = event.results[0][0].transcript;
-      interpretarVoz(texto);
-      setVoiceStatus(`Interpretado: "${texto}"`);
+      const suggestion = buildVoiceSuggestion(texto);
+      setDocumentSuggestions([suggestion]);
+      setSelectedSuggestions({ [suggestion.id]: true });
+      setProcessingReview(false);
+      setProcessingLabel('');
+      setVoiceStatus('');
     };
-    recognition.onend = () => setTimeout(() => setVoiceStatus(''), 5000);
+    recognition.onend = () => {
+      setProcessingReview(false);
+      setProcessingLabel('');
+      setTimeout(() => setVoiceStatus(''), 5000);
+    };
     recognition.start();
   };
 
@@ -220,13 +252,22 @@ export default function ExpenseForm({ user }) {
       return;
     }
 
-    setDocumentStatus('Analizando documento...');
+    setReviewMode('documento');
+    setReviewOpen(true);
+    setProcessingReview(true);
+    setProcessingLabel('Leyendo el documento...');
+    setDocumentStatus('Leyendo el documento...');
     setDocumentSuggestions([]);
+    setSelectedSuggestions({});
 
     try {
-      const extractedText = await extractTextFromDocument(estadoCuentaFile, setDocumentStatus);
+      const extractedText = await extractTextFromDocument(estadoCuentaFile, (status) => {
+        setDocumentStatus(status);
+        setProcessingLabel(status || 'Procesando la información...');
+      });
       setOcrText(extractedText);
-      setDocumentStatus('Enviando texto extraído a IA...');
+      setDocumentStatus('Detectando gastos...');
+      setProcessingLabel('Detectando gastos...');
 
       const needsFallbackFile = extractedText.trim().length < 40;
       const fileData = needsFallbackFile ? await fileToBase64(estadoCuentaFile) : null;
@@ -265,9 +306,13 @@ export default function ExpenseForm({ user }) {
       setDocumentSuggestions(suggestions);
       setSelectedSuggestions(Object.fromEntries(suggestions.map(item => [item.id, Number(item.confianza || 0) >= 0.65])));
       setDocumentStatus(data.resumen || 'Documento analizado.');
+      setProcessingReview(false);
+      setProcessingLabel('');
     } catch (error) {
       console.error('Error al analizar documento:', error);
       setDocumentStatus(error.message || 'No se pudo analizar el documento.');
+      setProcessingReview(false);
+      setProcessingLabel('');
     }
   };
 
@@ -294,8 +339,14 @@ export default function ExpenseForm({ user }) {
     });
 
     await batch.commit();
-    setDocumentSuggestions((actual) => actual.filter(item => !selectedSuggestions[item.id]));
+    const restantes = documentSuggestions.filter(item => !selectedSuggestions[item.id]);
+    setDocumentSuggestions(restantes);
     setSelectedSuggestions({});
+    if (restantes.length === 0) {
+      setReviewOpen(false);
+      setEstadoCuentaFile(null);
+      setOcrText('');
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -418,7 +469,6 @@ export default function ExpenseForm({ user }) {
                 <Sparkles size={18} /> Analizar con IA
               </button>
               {documentStatus && <p className="mt-2 text-xs font-medium text-indigo-700">{documentStatus}</p>}
-              {ocrText && <details className="mt-2 text-xs text-indigo-700 text-left"><summary className="font-bold cursor-pointer">Ver texto OCR</summary><pre className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-white p-2 border border-indigo-100 max-h-40 overflow-auto">{ocrText}</pre></details>}
             </div>
           )}
           {voiceStatus && <p className="mt-3 text-xs font-medium text-zinc-500 text-center">{voiceStatus}</p>}
@@ -557,91 +607,6 @@ export default function ExpenseForm({ user }) {
             </div>
           )}
 
-          {documentSuggestions.length > 0 && (
-            <div className="space-y-3 bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Revisar sugerencias</p>
-                <button type="button" onClick={guardarSugerenciasSeleccionadas} className="px-3 py-2 rounded-xl bg-emerald-500 text-white text-xs font-bold">
-                  Guardar seleccionados
-                </button>
-              </div>
-              {documentSuggestions.map((sugerencia) => {
-                const categoriaActual = categoriasDisponibles.find(cat => normalizar(cat.nombre) === normalizar(sugerencia.categoriaGrupo));
-                const categoriasParaTipo = categoriasDisponibles.filter(cat => (cat.tipoDestino || 'general') === (sugerencia.tipoDestino || 'general'));
-                const subcategoriasSugerencia = categoriaActual?.subcategorias || [];
-
-                return (
-                  <div key={sugerencia.id} className={`p-3 bg-white rounded-xl border ${selectedSuggestions[sugerencia.id] ? 'border-emerald-200' : 'border-zinc-100 opacity-70'}`}>
-                    <div className="flex items-start gap-3">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(selectedSuggestions[sugerencia.id])}
-                        onChange={(e) => setSelectedSuggestions((actual) => ({ ...actual, [sugerencia.id]: e.target.checked }))}
-                        className="mt-1 w-5 h-5 accent-emerald-500"
-                      />
-                      <div className="flex-1 space-y-2">
-                        <input
-                          value={sugerencia.descripcion || ''}
-                          onChange={(e) => updateSuggestion(sugerencia.id, { descripcion: e.target.value })}
-                          className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none font-bold text-zinc-800"
-                          placeholder="Descripción"
-                        />
-                        <div className="grid grid-cols-2 gap-2">
-                          <input
-                            type="number"
-                            value={sugerencia.monto || ''}
-                            onChange={(e) => updateSuggestion(sugerencia.id, { monto: Number(e.target.value) })}
-                            className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none font-bold"
-                          />
-                          <select
-                            value={sugerencia.moneda || 'UYU'}
-                            onChange={(e) => updateSuggestion(sugerencia.id, { moneda: e.target.value })}
-                            className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none font-bold"
-                          >
-                            <option value="UYU">Pesos</option>
-                            <option value="USD">Dólares</option>
-                          </select>
-                        </div>
-                        <select
-                          value={sugerencia.tipoDestino || 'general'}
-                          onChange={(e) => updateSuggestion(sugerencia.id, { tipoDestino: e.target.value, categoriaGrupo: '', subcategoria: '' })}
-                          className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none"
-                        >
-                          {TIPOS_DESTINO.map(tipo => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
-                        </select>
-                        <div className="grid grid-cols-2 gap-2">
-                          <select
-                            value={categoriaActual?.nombre || ''}
-                            onChange={(e) => updateSuggestion(sugerencia.id, { categoriaGrupo: e.target.value, subcategoria: '' })}
-                            className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none"
-                          >
-                            <option value="">Categoría</option>
-                            {categoriasParaTipo.map(cat => <option key={cat.id} value={cat.nombre}>{cat.nombre}</option>)}
-                          </select>
-                          <select
-                            value={sugerencia.subcategoria || ''}
-                            onChange={(e) => updateSuggestion(sugerencia.id, { subcategoria: e.target.value })}
-                            className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none"
-                          >
-                            <option value="">Subcategoría</option>
-                            {subcategoriasSugerencia.map(sub => {
-                              const nombre = getSubcategoriaNombre(sub);
-                              return <option key={nombre} value={nombre}>{nombre}</option>;
-                            })}
-                            {sugerencia.subcategoria && !subcategoriasSugerencia.some(sub => getSubcategoriaNombre(sub) === sugerencia.subcategoria) && (
-                              <option value={sugerencia.subcategoria}>{sugerencia.subcategoria}</option>
-                            )}
-                          </select>
-                        </div>
-                        {sugerencia.notas && <p className="text-xs text-zinc-400">{sugerencia.notas}</p>}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
           {camposExtra.length > 0 && (
             <div className="space-y-3 bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
               <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Datos extra</p>
@@ -682,6 +647,132 @@ export default function ExpenseForm({ user }) {
           {loading ? 'Registrando...' : 'Registrar Gasto'}
         </button>
       </form>
+
+      {reviewOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-end justify-center px-3 pb-3">
+          <div className="w-full max-w-lg max-h-[86vh] overflow-y-auto rounded-[2rem] bg-white p-5 shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-emerald-600">
+                  {reviewMode === 'voz' ? 'Carga por voz' : 'Carga inteligente'}
+                </p>
+                <h3 className="text-xl font-black text-zinc-900">Revisá antes de guardar</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReviewOpen(false)}
+                className="w-10 h-10 rounded-full bg-zinc-100 text-zinc-500 flex items-center justify-center"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {processingReview && (
+              <div className="py-12 flex flex-col items-center justify-center text-center">
+                <div className="w-12 h-12 rounded-full border-4 border-emerald-100 border-t-emerald-500 animate-spin" />
+                <p className="mt-5 font-bold text-zinc-800">{processingLabel || 'Procesando...'}</p>
+                <p className="mt-1 text-sm text-zinc-400">Enseguida vas a poder ajustar los datos.</p>
+              </div>
+            )}
+
+            {!processingReview && documentSuggestions.length === 0 && (
+              <div className="py-10 text-center">
+                <p className="font-bold text-zinc-800">No encontré gastos claros.</p>
+                <p className="mt-1 text-sm text-zinc-400">Podés intentar otra vez o cargarlo manualmente.</p>
+              </div>
+            )}
+
+            {!processingReview && documentSuggestions.length > 0 && (
+              <div className="space-y-3">
+                {documentSuggestions.map((sugerencia) => {
+                  const categoriaActual = categoriasDisponibles.find(cat => normalizar(cat.nombre) === normalizar(sugerencia.categoriaGrupo));
+                  const categoriasParaTipo = categoriasDisponibles.filter(cat => (cat.tipoDestino || 'general') === (sugerencia.tipoDestino || 'general'));
+                  const subcategoriasSugerencia = categoriaActual?.subcategorias || [];
+
+                  return (
+                    <div key={sugerencia.id} className={`p-3 bg-zinc-50 rounded-2xl border ${selectedSuggestions[sugerencia.id] ? 'border-emerald-200' : 'border-zinc-100 opacity-70'}`}>
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedSuggestions[sugerencia.id])}
+                          onChange={(e) => setSelectedSuggestions((actual) => ({ ...actual, [sugerencia.id]: e.target.checked }))}
+                          className="mt-2 w-5 h-5 accent-emerald-500"
+                        />
+                        <div className="flex-1 space-y-2">
+                          <input
+                            value={sugerencia.descripcion || ''}
+                            onChange={(e) => updateSuggestion(sugerencia.id, { descripcion: e.target.value })}
+                            className="w-full p-3 bg-white border border-zinc-100 rounded-xl outline-none font-bold text-zinc-800"
+                            placeholder="Descripción"
+                          />
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="number"
+                              value={sugerencia.monto || ''}
+                              onChange={(e) => updateSuggestion(sugerencia.id, { monto: Number(e.target.value) })}
+                              className="w-full p-3 bg-white border border-zinc-100 rounded-xl outline-none font-bold"
+                              placeholder="Monto"
+                            />
+                            <select
+                              value={sugerencia.moneda || 'UYU'}
+                              onChange={(e) => updateSuggestion(sugerencia.id, { moneda: e.target.value })}
+                              className="w-full p-3 bg-white border border-zinc-100 rounded-xl outline-none font-bold"
+                            >
+                              <option value="UYU">Pesos</option>
+                              <option value="USD">Dólares</option>
+                            </select>
+                          </div>
+                          <select
+                            value={sugerencia.tipoDestino || 'general'}
+                            onChange={(e) => updateSuggestion(sugerencia.id, { tipoDestino: e.target.value, categoriaGrupo: '', subcategoria: '' })}
+                            className="w-full p-3 bg-white border border-zinc-100 rounded-xl outline-none"
+                          >
+                            {TIPOS_DESTINO.map(tipo => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
+                          </select>
+                          <div className="grid grid-cols-2 gap-2">
+                            <select
+                              value={categoriaActual?.nombre || ''}
+                              onChange={(e) => updateSuggestion(sugerencia.id, { categoriaGrupo: e.target.value, subcategoria: '' })}
+                              className="w-full p-3 bg-white border border-zinc-100 rounded-xl outline-none"
+                            >
+                              <option value="">Categoría</option>
+                              {categoriasParaTipo.map(cat => <option key={cat.id} value={cat.nombre}>{cat.nombre}</option>)}
+                            </select>
+                            <select
+                              value={sugerencia.subcategoria || ''}
+                              onChange={(e) => updateSuggestion(sugerencia.id, { subcategoria: e.target.value })}
+                              className="w-full p-3 bg-white border border-zinc-100 rounded-xl outline-none"
+                            >
+                              <option value="">Subcategoría</option>
+                              {subcategoriasSugerencia.map(sub => {
+                                const nombre = getSubcategoriaNombre(sub);
+                                return <option key={nombre} value={nombre}>{nombre}</option>;
+                              })}
+                              {sugerencia.subcategoria && !subcategoriasSugerencia.some(sub => getSubcategoriaNombre(sub) === sugerencia.subcategoria) && (
+                                <option value={sugerencia.subcategoria}>{sugerencia.subcategoria}</option>
+                              )}
+                            </select>
+                          </div>
+                          {sugerencia.notas && <p className="text-xs text-zinc-400">{sugerencia.notas}</p>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={guardarSugerenciasSeleccionadas}
+                  disabled={!documentSuggestions.some(item => selectedSuggestions[item.id])}
+                  className="w-full mt-2 p-4 rounded-2xl bg-emerald-500 text-white font-bold disabled:opacity-50"
+                >
+                  Guardar seleccionados
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

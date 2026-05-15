@@ -18,7 +18,7 @@ const ocrCanvas = async (canvas, onProgress) => {
   const result = await Tesseract.recognize(canvas, 'spa+eng', {
     logger: (message) => {
       if (message.status === 'recognizing text') {
-        onProgress?.(`OCR ${(message.progress * 100).toFixed(0)}%`);
+        onProgress?.(`Leyendo texto ${(message.progress * 100).toFixed(0)}%`);
       }
     },
   });
