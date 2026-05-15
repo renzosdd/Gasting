@@ -103,10 +103,16 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     return () => { unsubVehiculos(); unsubHogares(); unsubTarjetas(); };
   }, [user.uid]);
 
-  const categoriasDisponibles = useMemo(() => ([
-    ...categorias,
-    ...categoriasUsuario.filter(categoria => categoria.estado !== 'rechazada'),
-  ]), [categorias, categoriasUsuario]);
+  const categoriasDisponibles = useMemo(() => {
+    const globales = categorias.filter(categoria => !categoria.mergedInto);
+    const globalKeys = new Set(globales.map(categoria => `${categoria.tipoDestino || 'general'}:${normalizar(categoria.nombre)}`));
+    const propias = categoriasUsuario.filter(categoria => (
+      categoria.estado !== 'rechazada'
+      && !categoria.mergedInto
+      && !globalKeys.has(`${categoria.tipoDestino || 'general'}:${normalizar(categoria.nombre)}`)
+    ));
+    return [...globales, ...propias];
+  }, [categorias, categoriasUsuario]);
 
   const categoriasFiltradas = useMemo(() => (
     categoriasDisponibles.filter(categoria => (categoria.tipoDestino || 'general') === tipoDestino)
@@ -139,6 +145,18 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     const nombre = categoriaSugerida.trim();
     if (!nombre) return;
 
+    const existente = categoriasDisponibles.find(categoria => (
+      (categoria.tipoDestino || 'general') === tipoDestino
+      && normalizar(categoria.nombre) === normalizar(nombre)
+    ));
+
+    if (existente) {
+      setCategoriaId(existente.id);
+      setCategoriaSugerida('');
+      setShowCategoriaInput(false);
+      return;
+    }
+
     try {
       const docRef = await addDoc(collection(db, 'categoria_sugerencias'), {
         userId: user.uid,
@@ -159,6 +177,14 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
   const sugerirSubcategoria = async () => {
     const nombre = subcategoriaSugerida.trim();
     if (!nombre || !categoriaId) return;
+
+    const existente = subcategorias.find(sub => normalizar(getSubcategoriaNombre(sub)) === normalizar(nombre));
+    if (existente) {
+      setSubcategoria(getSubcategoriaNombre(existente));
+      setSubcategoriaSugerida('');
+      setShowSubcategoriaInput(false);
+      return;
+    }
 
     try {
       await addDoc(collection(db, 'subcategoria_sugerencias'), {
@@ -656,7 +682,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
                 className="flex-1 p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-zinc-800 font-medium outline-none focus:ring-2 focus:ring-emerald-500"
               >
                 {categoriasFiltradas.length === 0 && <option value="">Agregá una categoría</option>}
-                {categoriasFiltradas.map(cat => <option key={cat.id} value={cat.id}>{cat.nombre}{cat.esSugerida ? ' (tuya)' : ''}</option>)}
+                {categoriasFiltradas.map(cat => <option key={cat.id} value={cat.id}>{cat.nombre}</option>)}
               </select>
               <button type="button" onClick={() => setShowCategoriaInput(true)} className="w-14 rounded-2xl bg-zinc-900 text-white flex items-center justify-center">
                 <Plus size={20} />
@@ -689,7 +715,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
                   const nombre = getSubcategoriaNombre(sub);
                   return <option key={nombre} value={nombre}>{nombre}</option>;
                 })}
-                {subcategoriaSugerida && <option value={subcategoriaSugerida}>{subcategoriaSugerida} (tuya)</option>}
+                {subcategoriaSugerida && <option value={subcategoriaSugerida}>{subcategoriaSugerida}</option>}
               </select>
               <button type="button" onClick={() => setShowSubcategoriaInput(true)} className="w-14 rounded-2xl bg-zinc-900 text-white flex items-center justify-center">
                 <Plus size={20} />

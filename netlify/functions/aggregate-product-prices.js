@@ -27,6 +27,10 @@ const canonicalProductKey = (nombre = '', marca = '', unidad = '') => {
   return `${text}|${unidad || 'unidad'}`;
 };
 
+const commerceKey = (valor = '') => normalizar(valor)
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim();
+
 const percentile = (values, p) => {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -44,6 +48,7 @@ export const handler = async (event) => {
       .get();
 
     const groups = new Map();
+    const commerceGroups = new Map();
     snapshot.docs.forEach((doc) => {
       const item = { id: doc.id, ...doc.data() };
       if (!item.nombre || Number(item.precioUnitario || 0) <= 0) return;
@@ -51,6 +56,14 @@ export const handler = async (event) => {
       const current = groups.get(key) || [];
       current.push(item);
       groups.set(key, current);
+
+      const comercio = commerceKey(item.comercio || '');
+      if (comercio) {
+        const commerceGroupKey = `${key}::commerce::${comercio}`;
+        const commerceCurrent = commerceGroups.get(commerceGroupKey) || [];
+        commerceCurrent.push({ ...item, comercioKey: comercio });
+        commerceGroups.set(commerceGroupKey, commerceCurrent);
+      }
     });
 
     const batches = [];
@@ -79,6 +92,36 @@ export const handler = async (event) => {
     const now = new Date();
     const periodo = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
+    const writeAggregate = (items, key, extra = {}) => {
+      const values = items.map(item => Number(item.precioUnitario || 0)).filter(Boolean);
+      if (values.length < MIN_SAMPLES) return false;
+
+      const sample = items[0];
+      const promedio = values.reduce((sum, value) => sum + value, 0) / values.length;
+      const docPrefix = extra.scope === 'comercio' ? `comercio_${extra.comercioKey}_` : 'global_';
+      const agregadoRef = db.collection('producto_precios_agregados').doc(`${periodo}_${docPrefix}${key.replace(/[^a-z0-9]+/g, '_').slice(0, 100)}`);
+      queueSet(agregadoRef, {
+        key,
+        periodo,
+        nombreCanonico: key.split('|')[0],
+        unidad: sample.unidad || 'unidad',
+        moneda: sample.moneda || 'UYU',
+        muestras: values.length,
+        promedio,
+        minimo: Math.min(...values),
+        maximo: Math.max(...values),
+        p25: percentile(values, 25),
+        p50: percentile(values, 50),
+        p75: percentile(values, 75),
+        actualizado: new Date(),
+        minMuestras: MIN_SAMPLES,
+        scope: extra.scope || 'global',
+        comercioKey: extra.comercioKey || '',
+        comercio: extra.comercio || '',
+      }, { merge: true });
+      return true;
+    };
+
     groups.forEach((items, key) => {
       const values = items.map(item => Number(item.precioUnitario || 0)).filter(Boolean);
       if (values.length < MIN_SAMPLES) {
@@ -95,29 +138,21 @@ export const handler = async (event) => {
         return;
       }
 
-      const sample = items[0];
-      const promedio = values.reduce((sum, value) => sum + value, 0) / values.length;
-      const agregadoRef = db.collection('producto_precios_agregados').doc(`${periodo}_${key.replace(/[^a-z0-9]+/g, '_').slice(0, 120)}`);
-      queueSet(agregadoRef, {
-        key,
-        periodo,
-        nombreCanonico: key.split('|')[0],
-        unidad: sample.unidad || 'unidad',
-        moneda: sample.moneda || 'UYU',
-        muestras: values.length,
-        promedio,
-        minimo: Math.min(...values),
-        maximo: Math.max(...values),
-        p25: percentile(values, 25),
-        p50: percentile(values, 50),
-        p75: percentile(values, 75),
-        actualizado: new Date(),
-        minMuestras: MIN_SAMPLES,
-      }, { merge: true });
+      writeAggregate(items, key);
       items.forEach((item) => {
         queueUpdate(db.collection('producto_precios').doc(item.id), { estadoAgregado: 'anonimizado', productoKey: key });
       });
       agregados += 1;
+    });
+
+    commerceGroups.forEach((items, groupKey) => {
+      const [key, comercioKeyValue] = groupKey.split('::commerce::');
+      const ok = writeAggregate(items, key, {
+        scope: 'comercio',
+        comercioKey: comercioKeyValue,
+        comercio: items[0]?.comercio || '',
+      });
+      if (ok) agregados += 1;
     });
 
     if (batchOps > 0) batches.push(batch);

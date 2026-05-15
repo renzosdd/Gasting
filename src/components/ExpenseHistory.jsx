@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
 import { collection, deleteDoc, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { Edit3, Save, Trash2, X } from 'lucide-react';
-import { getCategoriasFiltradas, getSubcategorias, TIPOS_DESTINO } from '../utils/expenseUtils';
+import { getCategoriasFiltradas, getSubcategorias, normalizar, TIPOS_DESTINO } from '../utils/expenseUtils';
 
 const currentMonth = () => {
   const now = new Date();
@@ -47,10 +47,16 @@ export default function ExpenseHistory({ user }) {
     return () => { unsubCat(); unsubUserCat(); };
   }, [user.uid]);
 
-  const categoriasDisponibles = useMemo(() => ([
-    ...categorias,
-    ...categoriasUsuario.filter(categoria => categoria.estado !== 'rechazada'),
-  ]), [categorias, categoriasUsuario]);
+  const categoriasDisponibles = useMemo(() => {
+    const globales = categorias.filter(categoria => !categoria.mergedInto);
+    const globalKeys = new Set(globales.map(categoria => `${categoria.tipoDestino || 'general'}:${normalizar(categoria.nombre)}`));
+    const propias = categoriasUsuario.filter(categoria => (
+      categoria.estado !== 'rechazada'
+      && !categoria.mergedInto
+      && !globalKeys.has(`${categoria.tipoDestino || 'general'}:${normalizar(categoria.nombre)}`)
+    ));
+    return [...globales, ...propias];
+  }, [categorias, categoriasUsuario]);
 
   const categoriasFiltradas = useMemo(() => (
     getCategoriasFiltradas(categoriasDisponibles, form.tipoDestino)
@@ -151,7 +157,7 @@ export default function ExpenseHistory({ user }) {
                     className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
                   >
                     <option value="">Categoría</option>
-                    {categoriasFiltradas.map(categoria => <option key={categoria.id} value={categoria.id}>{categoria.nombre}{categoria.esSugerida ? ' (tuya)' : ''}</option>)}
+                    {categoriasFiltradas.map(categoria => <option key={categoria.id} value={categoria.id}>{categoria.nombre}</option>)}
                   </select>
                   <select
                     value={form.subcategoria}

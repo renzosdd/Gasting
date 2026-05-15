@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { collection, deleteDoc, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AlertTriangle, BarChart3, CheckCircle2, Edit3, FileText, Filter, Mic, Plus, Save, Search, Sparkles, Trash2, X } from 'lucide-react';
 import { db } from '../firebase';
-import { getCategoriasFiltradas, getSubcategorias, TIPOS_DESTINO } from '../utils/expenseUtils';
+import { getCategoriasFiltradas, getSubcategorias, normalizar, TIPOS_DESTINO } from '../utils/expenseUtils';
 
 const currentMonth = () => {
   const now = new Date();
@@ -46,6 +46,7 @@ const formatMoney = (gasto) => {
 export default function Home({ user, onAddExpense }) {
   const [gastos, setGastos] = useState([]);
   const [presupuestos, setPresupuestos] = useState([]);
+  const [vehiculos, setVehiculos] = useState([]);
   const [hogares, setHogares] = useState([]);
   const [tarjetas, setTarjetas] = useState([]);
   const [productoPrecios, setProductoPrecios] = useState([]);
@@ -53,7 +54,11 @@ export default function Home({ user, onAddExpense }) {
   const [categorias, setCategorias] = useState([]);
   const [categoriasUsuario, setCategoriasUsuario] = useState([]);
   const [editando, setEditando] = useState(null);
-  const [form, setForm] = useState({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '' });
+  const [form, setForm] = useState({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '', vehiculoId: '', hogarId: '', tarjetaId: '' });
+  const [showNuevaCategoria, setShowNuevaCategoria] = useState(false);
+  const [showNuevaSubcategoria, setShowNuevaSubcategoria] = useState(false);
+  const [nuevaCategoria, setNuevaCategoria] = useState('');
+  const [nuevaSubcategoria, setNuevaSubcategoria] = useState('');
   const [showCharts, setShowCharts] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState({
@@ -81,7 +86,7 @@ export default function Home({ user, onAddExpense }) {
     });
     const sugerenciasQuery = query(collection(db, 'categoria_sugerencias'), where('userId', '==', user.uid));
     const unsubUserCat = onSnapshot(sugerenciasQuery, (snapshot) => {
-      setCategoriasUsuario(snapshot.docs.map(doc => ({ id: `sugerida-${doc.id}`, ...doc.data(), esSugerida: true })));
+      setCategoriasUsuario(snapshot.docs.map(doc => ({ id: `sugerida-${doc.id}`, sugerenciaId: doc.id, ...doc.data(), esSugerida: true })));
     });
     return () => { unsubCat(); unsubUserCat(); };
   }, [user.uid]);
@@ -100,6 +105,7 @@ export default function Home({ user, onAddExpense }) {
 
   useEffect(() => {
     const presupuestosQuery = query(collection(db, 'presupuestos'), where('miembros', 'array-contains', user.uid));
+    const vehiculosQuery = query(collection(db, 'vehiculos'), where('propietarios', 'array-contains', user.uid));
     const hogaresQuery = query(collection(db, 'hogares'), where('propietarios', 'array-contains', user.uid));
     const hogaresCompartidosQuery = user.email
       ? query(collection(db, 'hogares'), where('miembrosEmails', 'array-contains', user.email.toLowerCase()))
@@ -108,6 +114,9 @@ export default function Home({ user, onAddExpense }) {
 
     const unsubPresupuestos = onSnapshot(presupuestosQuery, (snapshot) => {
       setPresupuestos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubVehiculos = onSnapshot(vehiculosQuery, (snapshot) => {
+      setVehiculos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
     const unsubHogares = onSnapshot(hogaresQuery, (snapshot) => {
       setHogares(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -122,7 +131,7 @@ export default function Home({ user, onAddExpense }) {
       setTarjetas(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    return () => { unsubPresupuestos(); unsubHogares(); unsubHogaresCompartidos(); unsubTarjetas(); };
+    return () => { unsubPresupuestos(); unsubVehiculos(); unsubHogares(); unsubHogaresCompartidos(); unsubTarjetas(); };
   }, [user.email, user.uid]);
 
   const gastosPeriodo = useMemo(() => (
@@ -155,6 +164,10 @@ export default function Home({ user, onAddExpense }) {
       .reduce((total, gasto) => total + Number(gasto.monto || 0), 0)
   ), [gastosPeriodo]);
 
+  const pendientesRevision = useMemo(() => (
+    gastosMes.filter(gasto => gasto.estadoRevision === 'pendiente_revision').length
+  ), [gastosMes]);
+
   const porCategoria = useMemo(() => {
     const grupos = new Map();
     gastosPeriodo.filter(gasto => (gasto.moneda || 'UYU') === 'UYU').forEach((gasto) => {
@@ -177,10 +190,16 @@ export default function Home({ user, onAddExpense }) {
 
   const chartData = porCategoria.map(item => ({ categoria: item.categoria, total: item.total }));
 
-  const categoriasDisponibles = useMemo(() => ([
-    ...categorias,
-    ...categoriasUsuario.filter(categoria => categoria.estado !== 'rechazada'),
-  ]), [categorias, categoriasUsuario]);
+  const categoriasDisponibles = useMemo(() => {
+    const globales = categorias.filter(categoria => !categoria.mergedInto);
+    const globalKeys = new Set(globales.map(categoria => `${categoria.tipoDestino || 'general'}:${normalizar(categoria.nombre)}`));
+    const propias = categoriasUsuario.filter(categoria => (
+      categoria.estado !== 'rechazada'
+      && !categoria.mergedInto
+      && !globalKeys.has(`${categoria.tipoDestino || 'general'}:${normalizar(categoria.nombre)}`)
+    ));
+    return [...globales, ...propias];
+  }, [categorias, categoriasUsuario]);
 
   const categoriasFiltradas = useMemo(() => (
     getCategoriasFiltradas(categoriasDisponibles, form.tipoDestino)
@@ -191,11 +210,15 @@ export default function Home({ user, onAddExpense }) {
   const subcategorias = getSubcategorias(categoriaSeleccionada);
 
   const productoInsights = useMemo(() => {
-    const agregadosPorKey = new Map(productoAgregados.map(item => [item.key, item]));
+    const comercioKey = (valor = '') => valor.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const agregadosGlobales = new Map(productoAgregados.filter(item => (item.scope || 'global') === 'global').map(item => [item.key, item]));
+    const agregadosPorComercio = new Map(productoAgregados.filter(item => item.scope === 'comercio').map(item => [`${item.key}|${item.comercioKey}`, item]));
     return productoPrecios
       .filter(item => item.productoKey && Number(item.precioUnitario || 0) > 0)
       .map(item => {
-        const agregado = agregadosPorKey.get(item.productoKey);
+        const keyComercio = comercioKey(item.comercio || '');
+        const agregadoComercio = keyComercio ? agregadosPorComercio.get(`${item.productoKey}|${keyComercio}`) : null;
+        const agregado = agregadoComercio || agregadosGlobales.get(item.productoKey);
         if (!agregado || Number(agregado.muestras || 0) < Number(agregado.minMuestras || 5)) return null;
         const promedio = Number(agregado.promedio || 0);
         const precio = Number(item.precioUnitario || 0);
@@ -210,6 +233,8 @@ export default function Home({ user, onAddExpense }) {
           promedio,
           muestras: agregado.muestras,
           moneda: item.moneda || 'UYU',
+          comercio: agregadoComercio ? item.comercio : '',
+          scope: agregadoComercio ? 'comercio' : 'global',
         };
       })
       .filter(Boolean)
@@ -265,7 +290,7 @@ export default function Home({ user, onAddExpense }) {
     productoInsights.forEach((insight) => {
       resultado.push({
         tipo: 'precio',
-        titulo: `${insight.nombre} está ${Math.abs(Math.round(insight.diff))}% ${insight.diff > 0 ? 'más caro' : 'más barato'} que el promedio`,
+        titulo: `${insight.nombre} está ${Math.abs(Math.round(insight.diff))}% ${insight.diff > 0 ? 'más caro' : 'más barato'} ${insight.scope === 'comercio' ? `en ${insight.comercio}` : 'que el promedio'}`,
         texto: `${insight.moneda === 'USD' ? 'US$' : '$'}${insight.precio.toFixed(0)} vs promedio ${insight.moneda === 'USD' ? 'US$' : '$'}${insight.promedio.toFixed(0)} (${insight.muestras} muestras).`,
       });
     });
@@ -286,18 +311,93 @@ export default function Home({ user, onAddExpense }) {
       categoriaId: gasto.categoriaId || '',
       categoria: gasto.categoriaGrupo || '',
       subcategoria: gasto.subcategoria || gasto.categoria || '',
+      vehiculoId: gasto.vehiculoId || '',
+      hogarId: gasto.hogarId || '',
+      tarjetaId: gasto.tarjetaId || '',
     });
   };
 
   const cancelarEdicion = () => {
     setEditando(null);
-    setForm({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '' });
+    setForm({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '', vehiculoId: '', hogarId: '', tarjetaId: '' });
+    setShowNuevaCategoria(false);
+    setShowNuevaSubcategoria(false);
+    setNuevaCategoria('');
+    setNuevaSubcategoria('');
+  };
+
+  const crearCategoriaDesdeEdicion = async () => {
+    const nombre = nuevaCategoria.trim();
+    if (!nombre) return;
+
+    const existente = categoriasDisponibles.find(categoria => (
+      (categoria.tipoDestino || 'general') === form.tipoDestino
+      && normalizar(categoria.nombre) === normalizar(nombre)
+    ));
+
+    if (existente) {
+      setForm({ ...form, categoriaId: existente.id, categoria: existente.nombre, subcategoria: '' });
+      setNuevaCategoria('');
+      setShowNuevaCategoria(false);
+      return;
+    }
+
+    try {
+      const docRef = await addDoc(collection(db, 'categoria_sugerencias'), {
+        userId: user.uid,
+        nombre,
+        tipoDestino: form.tipoDestino,
+        subcategorias: [],
+        estado: 'pendiente',
+        fecha: serverTimestamp(),
+      });
+
+      setForm({ ...form, categoriaId: `sugerida-${docRef.id}`, categoria: nombre, subcategoria: '' });
+      setNuevaCategoria('');
+      setShowNuevaCategoria(false);
+    } catch (error) {
+      alert('Error al crear categoría: ' + error.message);
+    }
+  };
+
+  const crearSubcategoriaDesdeEdicion = async () => {
+    const nombre = nuevaSubcategoria.trim();
+    if (!nombre || !form.categoriaId) return;
+
+    const existe = subcategorias.some(subcategoria => normalizar(subcategoria) === normalizar(nombre));
+    if (existe) {
+      setForm({ ...form, subcategoria: subcategorias.find(subcategoria => normalizar(subcategoria) === normalizar(nombre)) || nombre });
+      setNuevaSubcategoria('');
+      setShowNuevaSubcategoria(false);
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, 'subcategoria_sugerencias'), {
+        userId: user.uid,
+        categoriaId: categoriaSeleccionada?.sugerenciaId || categoriaSeleccionada?.id || form.categoriaId,
+        categoriaNombre: categoriaSeleccionada?.nombre || form.categoria,
+        tipoDestino: form.tipoDestino,
+        nombre,
+        estado: 'pendiente',
+        fecha: serverTimestamp(),
+      });
+
+      setForm({ ...form, subcategoria: nombre });
+      setNuevaSubcategoria('');
+      setShowNuevaSubcategoria(false);
+    } catch (error) {
+      alert('Error al crear subcategoría: ' + error.message);
+    }
   };
 
   const guardarEdicion = async (gasto) => {
     const categoria = categoriasDisponibles.find(item => item.id === form.categoriaId)
       || categoriasDisponibles.find(item => item.nombre === form.categoria);
     const categoriaNombre = categoria?.nombre || form.categoria;
+    const vehiculo = vehiculos.find(item => item.id === form.vehiculoId);
+    const hogar = hogares.find(item => item.id === form.hogarId);
+    const tarjeta = tarjetas.find(item => item.id === form.tarjetaId);
 
     await updateDoc(doc(db, 'gastos', gasto.id), {
       monto: Number(form.monto),
@@ -307,6 +407,12 @@ export default function Home({ user, onAddExpense }) {
       categoriaGrupo: categoriaNombre,
       categoria: form.subcategoria || categoriaNombre,
       subcategoria: form.subcategoria,
+      vehiculoId: form.tipoDestino === 'vehiculo' && form.vehiculoId ? form.vehiculoId : null,
+      vehiculoNombre: form.tipoDestino === 'vehiculo' && vehiculo ? vehiculo.nombre || `${vehiculo.marca || ''} ${vehiculo.modelo || ''}`.trim() : null,
+      hogarId: form.tipoDestino === 'hogar' && form.hogarId ? form.hogarId : null,
+      hogarNombre: form.tipoDestino === 'hogar' && hogar ? hogar.nombre : null,
+      tarjetaId: form.tipoDestino === 'tarjeta' && form.tarjetaId ? form.tarjetaId : null,
+      tarjetaNombre: form.tipoDestino === 'tarjeta' && tarjeta ? tarjeta.nombre || `${tarjeta.banco || ''} ${tarjeta.marca || ''}`.trim() : null,
       estadoRevision: 'confirmado',
     });
     cancelarEdicion();
@@ -399,6 +505,26 @@ export default function Home({ user, onAddExpense }) {
               <option value="confirmado">Confirmados</option>
               <option value="pendiente_revision">Pendientes</option>
             </select>
+          </div>
+        )}
+        {pendientesRevision > 0 && (
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setFilters((actual) => ({ ...actual, estadoRevision: actual.estadoRevision === 'pendiente_revision' ? 'todos' : 'pendiente_revision' }))}
+              className={`px-3 py-2 rounded-full text-xs font-black transition-all ${filters.estadoRevision === 'pendiente_revision' ? 'bg-amber-500 text-white' : 'bg-amber-100 text-amber-700'}`}
+            >
+              {pendientesRevision} pendiente{pendientesRevision > 1 ? 's' : ''} de revisar
+            </button>
+            {filters.estadoRevision === 'pendiente_revision' && (
+              <button
+                type="button"
+                onClick={() => setFilters((actual) => ({ ...actual, estadoRevision: 'todos' }))}
+                className="px-3 py-2 rounded-full bg-zinc-100 text-zinc-500 text-xs font-black"
+              >
+                Ver todos
+              </button>
+            )}
           </div>
         )}
       </section>
@@ -494,31 +620,87 @@ export default function Home({ user, onAddExpense }) {
                     <option value="USD">Dólares</option>
                   </select>
                 </div>
-                <select value={form.tipoDestino} onChange={e => setForm({ ...form, tipoDestino: e.target.value, categoriaId: '', categoria: '', subcategoria: '' })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
+                <select value={form.tipoDestino} onChange={e => setForm({ ...form, tipoDestino: e.target.value, categoriaId: '', categoria: '', subcategoria: '', vehiculoId: '', hogarId: '', tarjetaId: '' })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
                   {TIPOS_DESTINO.map(tipo => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
                 </select>
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    value={categoriaSeleccionada?.id || form.categoriaId}
-                    onChange={e => {
-                      const categoria = categoriasDisponibles.find(item => item.id === e.target.value);
-                      setForm({ ...form, categoriaId: e.target.value, categoria: categoria?.nombre || '', subcategoria: '' });
-                    }}
-                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
-                  >
-                    <option value="">Categoría</option>
-                    {categoriasFiltradas.map(categoria => <option key={categoria.id} value={categoria.id}>{categoria.nombre}{categoria.esSugerida ? ' (tuya)' : ''}</option>)}
-                  </select>
-                  <select
-                    value={form.subcategoria}
-                    onChange={e => setForm({ ...form, subcategoria: e.target.value })}
-                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
-                  >
-                    <option value="">Subcategoría</option>
-                    {subcategorias.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
-                    {form.subcategoria && !subcategorias.includes(form.subcategoria) && <option value={form.subcategoria}>{form.subcategoria}</option>}
-                  </select>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <select
+                        value={categoriaSeleccionada?.id || form.categoriaId}
+                        onChange={e => {
+                          const categoria = categoriasDisponibles.find(item => item.id === e.target.value);
+                          setForm({ ...form, categoriaId: e.target.value, categoria: categoria?.nombre || '', subcategoria: '' });
+                        }}
+                        className="min-w-0 flex-1 p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
+                      >
+                        <option value="">Categoría</option>
+                        {categoriasFiltradas.map(categoria => <option key={categoria.id} value={categoria.id}>{categoria.nombre}</option>)}
+                      </select>
+                      <button type="button" onClick={() => setShowNuevaCategoria(true)} className="w-12 rounded-xl bg-zinc-900 text-white flex items-center justify-center">
+                        <Plus size={18} />
+                      </button>
+                    </div>
+                    {showNuevaCategoria && (
+                      <div className="flex gap-2">
+                        <input
+                          value={nuevaCategoria}
+                          onChange={e => setNuevaCategoria(e.target.value)}
+                          placeholder="Nueva categoría"
+                          className="min-w-0 flex-1 p-3 bg-white border border-dashed border-zinc-300 rounded-xl outline-none"
+                        />
+                        <button type="button" onClick={crearCategoriaDesdeEdicion} className="px-3 rounded-xl bg-emerald-500 text-white font-black">OK</button>
+                        <button type="button" onClick={() => setShowNuevaCategoria(false)} className="px-3 rounded-xl bg-zinc-100 text-zinc-500"><X size={16} /></button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <select
+                        value={form.subcategoria}
+                        onChange={e => setForm({ ...form, subcategoria: e.target.value })}
+                        className="min-w-0 flex-1 p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
+                      >
+                        <option value="">Subcategoría</option>
+                        {subcategorias.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+                        {form.subcategoria && !subcategorias.includes(form.subcategoria) && <option value={form.subcategoria}>{form.subcategoria}</option>}
+                      </select>
+                      <button type="button" onClick={() => setShowNuevaSubcategoria(true)} disabled={!form.categoriaId} className="w-12 rounded-xl bg-zinc-900 text-white flex items-center justify-center disabled:opacity-30">
+                        <Plus size={18} />
+                      </button>
+                    </div>
+                    {showNuevaSubcategoria && (
+                      <div className="flex gap-2">
+                        <input
+                          value={nuevaSubcategoria}
+                          onChange={e => setNuevaSubcategoria(e.target.value)}
+                          placeholder="Nueva subcategoría"
+                          className="min-w-0 flex-1 p-3 bg-white border border-dashed border-zinc-300 rounded-xl outline-none"
+                        />
+                        <button type="button" onClick={crearSubcategoriaDesdeEdicion} className="px-3 rounded-xl bg-emerald-500 text-white font-black">OK</button>
+                        <button type="button" onClick={() => setShowNuevaSubcategoria(false)} className="px-3 rounded-xl bg-zinc-100 text-zinc-500"><X size={16} /></button>
+                      </div>
+                    )}
+                  </div>
                 </div>
+                {form.tipoDestino === 'vehiculo' && (
+                  <select value={form.vehiculoId} onChange={e => setForm({ ...form, vehiculoId: e.target.value })} className="w-full p-3 bg-emerald-50 border border-emerald-100 rounded-xl outline-none font-bold text-emerald-900">
+                    <option value="">Sin vehículo asociado</option>
+                    {vehiculos.map(vehiculo => <option key={vehiculo.id} value={vehiculo.id}>{vehiculo.nombre || `${vehiculo.marca || ''} ${vehiculo.modelo || ''}`.trim()}</option>)}
+                  </select>
+                )}
+                {form.tipoDestino === 'hogar' && (
+                  <select value={form.hogarId} onChange={e => setForm({ ...form, hogarId: e.target.value })} className="w-full p-3 bg-blue-50 border border-blue-100 rounded-xl outline-none font-bold text-blue-900">
+                    <option value="">Sin casa asociada</option>
+                    {hogares.map(hogar => <option key={hogar.id} value={hogar.id}>{hogar.nombre}</option>)}
+                  </select>
+                )}
+                {form.tipoDestino === 'tarjeta' && (
+                  <select value={form.tarjetaId} onChange={e => setForm({ ...form, tarjetaId: e.target.value })} className="w-full p-3 bg-indigo-50 border border-indigo-100 rounded-xl outline-none font-bold text-indigo-900">
+                    <option value="">Sin tarjeta asociada</option>
+                    {tarjetas.map(tarjeta => <option key={tarjeta.id} value={tarjeta.id}>{tarjeta.nombre || `${tarjeta.banco || ''} ${tarjeta.marca || ''}`.trim()}</option>)}
+                  </select>
+                )}
                 <div className="flex gap-2">
                   <button onClick={() => guardarEdicion(gasto)} className="flex-1 p-3 rounded-2xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2"><Save size={18} /> Guardar</button>
                   <button onClick={cancelarEdicion} className="p-3 rounded-2xl bg-zinc-100 text-zinc-500"><X size={18} /></button>

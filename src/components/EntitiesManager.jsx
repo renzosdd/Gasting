@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { db, storage } from '../firebase';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { CarFront, CreditCard, Edit3, Home, Image as ImageIcon, MapPin, Plus, Target, Trash2, Users, X } from 'lucide-react';
+import { CarFront, CreditCard, Edit3, Home, Image as ImageIcon, Mail, MapPin, Phone, Plus, Save, Target, Trash2, UserRound, Users, X } from 'lucide-react';
 import { getSubcategoriaNombre } from '../utils/expenseUtils';
 
 const EMPTY_VEHICULO = { nombre: '', marca: '', modelo: '', anio: '', tipo_motor: 'Nafta', kilometraje_actual: '', fotoUrl: '' };
@@ -10,6 +10,7 @@ const EMPTY_HOGAR = { nombre: '', direccion: '', fotoUrl: '', servicios: [], mie
 const EMPTY_TARJETA = { nombre: '', banco: '', marca: 'Visa', ultimos4: '', diaCierre: '', diaVencimiento: '' };
 const EMPTY_SERVICIO = { nombre: '', numeroCuenta: '', diaPago: '', proveedor: '' };
 const EMPTY_PRESUPUESTO = { nombre: '', monto: '', moneda: 'UYU', hogarId: '', categoriaGrupo: '', subcategoria: '', periodo: 'mensual' };
+const EMPTY_PERFIL = { nombre: '', telefono: '', monedaPrincipal: 'UYU' };
 
 const compressImage = (file, maxSize = 900, quality = 0.72) => new Promise((resolve, reject) => {
   const image = new Image();
@@ -40,6 +41,8 @@ const compressImage = (file, maxSize = 900, quality = 0.72) => new Promise((reso
 
 export default function EntitiesManager({ user }) {
   const [tab, setTab] = useState('vehiculos');
+  const [perfil, setPerfil] = useState({ ...EMPTY_PERFIL, nombre: user.displayName || '' });
+  const [showPerfilForm, setShowPerfilForm] = useState(false);
   const [vehiculos, setVehiculos] = useState([]);
   const [hogares, setHogares] = useState([]);
   const [tarjetas, setTarjetas] = useState([]);
@@ -55,8 +58,17 @@ export default function EntitiesManager({ user }) {
   const [formPresupuesto, setFormPresupuesto] = useState(EMPTY_PRESUPUESTO);
   const [showServicioForm, setShowServicioForm] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [perfilLoading, setPerfilLoading] = useState(false);
 
   useEffect(() => {
+    const unsubPerfil = onSnapshot(doc(db, 'usuarios', user.uid), (snapshot) => {
+      const data = snapshot.data() || {};
+      setPerfil({
+        nombre: data.nombre || user.displayName || '',
+        telefono: data.telefono || '',
+        monedaPrincipal: data.monedaPrincipal || 'UYU',
+      });
+    });
     const vehiculosQuery = query(collection(db, 'vehiculos'), where('propietarios', 'array-contains', user.uid));
     const hogaresQuery = query(collection(db, 'hogares'), where('propietarios', 'array-contains', user.uid));
     const hogaresCompartidosQuery = user.email
@@ -87,13 +99,19 @@ export default function EntitiesManager({ user }) {
       setCategorias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    return () => { unsubVehiculos(); unsubHogares(); unsubHogaresCompartidos(); unsubTarjetas(); unsubPresupuestos(); unsubCategorias(); };
-  }, [user.email, user.uid]);
+    return () => { unsubPerfil(); unsubVehiculos(); unsubHogares(); unsubHogaresCompartidos(); unsubTarjetas(); unsubPresupuestos(); unsubCategorias(); };
+  }, [user.displayName, user.email, user.uid]);
+
+  const categoriasActivas = useMemo(() => (
+    categorias
+      .filter(categoria => !categoria.mergedInto)
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
+  ), [categorias]);
 
   const subcategoriasPresupuesto = useMemo(() => {
-    const categoria = categorias.find(item => item.nombre === formPresupuesto.categoriaGrupo);
+    const categoria = categoriasActivas.find(item => item.nombre === formPresupuesto.categoriaGrupo);
     return Array.isArray(categoria?.subcategorias) ? categoria.subcategorias.map(getSubcategoriaNombre).filter(Boolean) : [];
-  }, [categorias, formPresupuesto.categoriaGrupo]);
+  }, [categoriasActivas, formPresupuesto.categoriaGrupo]);
 
   const reset = () => {
     setEditandoId(null);
@@ -275,6 +293,24 @@ export default function EntitiesManager({ user }) {
     }
   };
 
+  const guardarPerfil = async (e) => {
+    e.preventDefault();
+    setPerfilLoading(true);
+    try {
+      await setDoc(doc(db, 'usuarios', user.uid), {
+        nombre: perfil.nombre.trim(),
+        email: user.email || '',
+        telefono: perfil.telefono.trim(),
+        monedaPrincipal: perfil.monedaPrincipal,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      setShowPerfilForm(false);
+    } catch (error) {
+      alert('Error al guardar perfil: ' + error.message);
+    }
+    setPerfilLoading(false);
+  };
+
   const guardarTarjeta = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -299,22 +335,102 @@ export default function EntitiesManager({ user }) {
 
   const creando = editandoId === 'nuevo';
   const esPropietario = (entidad) => Array.isArray(entidad.propietarios) && entidad.propietarios.includes(user.uid);
+  const nombrePerfil = perfil.nombre || user.displayName || user.email?.split('@')[0] || 'Usuario';
+  const inicialPerfil = nombrePerfil.trim().charAt(0).toUpperCase() || 'U';
 
   return (
-    <div className="pt-4 animate-in fade-in duration-500">
-      <h2 className="text-2xl font-extrabold text-zinc-800 mb-6">Mis Entidades</h2>
+    <div className="pt-4 animate-in fade-in duration-500 space-y-5">
+      <section className="rounded-[2rem] bg-zinc-900 text-white p-5 shadow-xl shadow-zinc-900/10">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-16 h-16 rounded-3xl bg-white/10 border border-white/10 flex items-center justify-center overflow-hidden shrink-0">
+              {user.photoURL ? <img src={user.photoURL} alt={nombrePerfil} className="w-full h-full object-cover" /> : <span className="text-2xl font-black">{inicialPerfil}</span>}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Perfil</p>
+              <h2 className="mt-1 text-2xl font-black truncate">{nombrePerfil}</h2>
+              <p className="text-sm font-medium text-zinc-400 truncate">{user.email}</p>
+            </div>
+          </div>
+          <button type="button" onClick={() => setShowPerfilForm((actual) => !actual)} className="px-4 py-3 rounded-2xl bg-white text-zinc-900 font-black text-sm shrink-0">
+            {showPerfilForm ? 'Cerrar' : 'Editar'}
+          </button>
+        </div>
 
-      <div className="grid grid-cols-4 bg-zinc-200/50 p-1 rounded-2xl mb-6">
-        <button onClick={() => cambiarTab('vehiculos')} className={`flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'vehiculos' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}>
+        <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+          <div className="rounded-2xl bg-white/10 border border-white/10 p-3">
+            <p className="text-zinc-400 font-bold text-xs uppercase tracking-wider">Moneda</p>
+            <p className="mt-1 font-black">{perfil.monedaPrincipal}</p>
+          </div>
+          <div className="rounded-2xl bg-white/10 border border-white/10 p-3">
+            <p className="text-zinc-400 font-bold text-xs uppercase tracking-wider">Teléfono</p>
+            <p className="mt-1 font-black truncate">{perfil.telefono || 'Sin cargar'}</p>
+          </div>
+        </div>
+
+        {showPerfilForm && (
+          <form onSubmit={guardarPerfil} className="mt-5 space-y-3 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="relative">
+                <UserRound size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <input value={perfil.nombre} onChange={e => setPerfil({ ...perfil, nombre: e.target.value })} placeholder="Nombre" className="w-full pl-11 pr-4 py-4 bg-white/10 border border-white/10 rounded-2xl outline-none text-white placeholder:text-zinc-500" />
+              </label>
+              <label className="relative">
+                <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <input value={perfil.telefono} onChange={e => setPerfil({ ...perfil, telefono: e.target.value })} placeholder="Teléfono" className="w-full pl-11 pr-4 py-4 bg-white/10 border border-white/10 rounded-2xl outline-none text-white placeholder:text-zinc-500" />
+              </label>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+              <label className="relative">
+                <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <input value={user.email || ''} disabled className="w-full pl-11 pr-4 py-4 bg-white/5 border border-white/10 rounded-2xl outline-none text-zinc-400" />
+              </label>
+              <select value={perfil.monedaPrincipal} onChange={e => setPerfil({ ...perfil, monedaPrincipal: e.target.value })} className="px-4 py-4 bg-white/10 border border-white/10 rounded-2xl outline-none text-white font-black">
+                <option className="text-zinc-900" value="UYU">UYU</option>
+                <option className="text-zinc-900" value="USD">USD</option>
+              </select>
+            </div>
+            <button type="submit" disabled={perfilLoading} className="w-full p-4 rounded-2xl bg-emerald-500 text-white font-black disabled:opacity-50 flex items-center justify-center gap-2">
+              <Save size={18} /> {perfilLoading ? 'Guardando...' : 'Guardar perfil'}
+            </button>
+          </form>
+        )}
+      </section>
+
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
+          <CarFront size={19} className="text-emerald-600" />
+          <p className="mt-3 text-2xl font-black text-zinc-900">{vehiculos.length}</p>
+          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Autos</p>
+        </div>
+        <div className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
+          <Home size={19} className="text-blue-600" />
+          <p className="mt-3 text-2xl font-black text-zinc-900">{hogares.length}</p>
+          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Casas</p>
+        </div>
+        <div className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
+          <CreditCard size={19} className="text-indigo-600" />
+          <p className="mt-3 text-2xl font-black text-zinc-900">{tarjetas.length}</p>
+          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Tarjetas</p>
+        </div>
+        <div className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
+          <Target size={19} className="text-amber-600" />
+          <p className="mt-3 text-2xl font-black text-zinc-900">{presupuestos.length}</p>
+          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Planes</p>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-4 bg-white p-1 rounded-[2rem] border border-zinc-100 shadow-sm">
+        <button onClick={() => cambiarTab('vehiculos')} className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-3 rounded-[1.55rem] text-xs sm:text-sm font-black transition-all ${tab === 'vehiculos' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-400'}`}>
           <CarFront size={18} /> Autos
         </button>
-        <button onClick={() => cambiarTab('hogares')} className={`flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'hogares' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}>
+        <button onClick={() => cambiarTab('hogares')} className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-3 rounded-[1.55rem] text-xs sm:text-sm font-black transition-all ${tab === 'hogares' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-400'}`}>
           <Home size={18} /> Casas
         </button>
-        <button onClick={() => cambiarTab('tarjetas')} className={`flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'tarjetas' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}>
+        <button onClick={() => cambiarTab('tarjetas')} className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-3 rounded-[1.55rem] text-xs sm:text-sm font-black transition-all ${tab === 'tarjetas' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-400'}`}>
           <CreditCard size={18} /> Tarjetas
         </button>
-        <button onClick={() => cambiarTab('presupuestos')} className={`flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'presupuestos' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}>
+        <button onClick={() => cambiarTab('presupuestos')} className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-3 rounded-[1.55rem] text-xs sm:text-sm font-black transition-all ${tab === 'presupuestos' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-400'}`}>
           <Target size={18} /> Plan
         </button>
       </div>
@@ -507,7 +623,7 @@ export default function EntitiesManager({ user }) {
               </select>
               <select value={formPresupuesto.categoriaGrupo} onChange={e => setFormPresupuesto({ ...formPresupuesto, categoriaGrupo: e.target.value, subcategoria: '' })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
                 <option value="">Todas las categorías</option>
-                {categorias.map(categoria => <option key={categoria.id} value={categoria.nombre}>{categoria.nombre}</option>)}
+                {categoriasActivas.map(categoria => <option key={categoria.id} value={categoria.nombre}>{categoria.nombre}</option>)}
               </select>
               <select value={formPresupuesto.subcategoria} onChange={e => setFormPresupuesto({ ...formPresupuesto, subcategoria: e.target.value })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
                 <option value="">Todas las subcategorías</option>

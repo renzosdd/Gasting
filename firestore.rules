@@ -58,6 +58,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /usuarios/{userId} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
+      allow read: if isAdmin();
+    }
+
     match /categorias/{categoriaId} {
       allow read: if signedIn();
       allow write: if isAdmin();
@@ -70,8 +75,8 @@ service cloud.firestore {
 
     match /gastos/{gastoId} {
       allow create: if ownsUserField();
-      allow read, delete: if ownsResourceUserField();
-      allow update: if ownsResourceUserField() && ownsUserField();
+      allow read, delete: if ownsResourceUserField() || isAdmin();
+      allow update: if isAdmin() || (ownsResourceUserField() && ownsUserField());
     }
 
     match /subcategoria_sugerencias/{sugerenciaId} {
@@ -107,8 +112,8 @@ service cloud.firestore {
 
     match /presupuestos/{presupuestoId} {
       allow create: if ownsBudget();
-      allow read, delete: if ownsExistingBudget();
-      allow update: if ownsExistingBudget() && ownsBudget();
+      allow read, delete: if ownsExistingBudget() || isAdmin();
+      allow update: if isAdmin() || (ownsExistingBudget() && ownsBudget());
     }
 
     match /producto_precios/{precioId} {

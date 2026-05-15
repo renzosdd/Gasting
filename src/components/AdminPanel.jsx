@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore';
 import { Database, GitMerge, Plus, Shield, Trash2 } from 'lucide-react';
 import { getSubcategoriaNombre, normalizar } from '../utils/expenseUtils';
 
@@ -12,6 +12,55 @@ const TIPOS_DESTINO = [
 ];
 
 const normalizarEmail = (email) => email.trim().toLowerCase();
+
+const CATEGORIAS_BASE = [
+  { nombre: 'Alimentación', tipoDestino: 'general', subcategorias: ['Supermercado', 'Restaurante', 'Delivery', 'Carnicería', 'Verdulería'] },
+  { nombre: 'Transporte', tipoDestino: 'general', subcategorias: ['Ómnibus', 'Taxi/App', 'Estacionamiento', 'Peajes'] },
+  { nombre: 'Salud', tipoDestino: 'general', subcategorias: ['Farmacia', 'Consulta médica', 'Estudios', 'Seguro médico'] },
+  { nombre: 'Educación', tipoDestino: 'general', subcategorias: ['Cuotas', 'Materiales', 'Cursos'] },
+  { nombre: 'Ropa y cuidado', tipoDestino: 'general', subcategorias: ['Ropa', 'Calzado', 'Peluquería'] },
+  { nombre: 'Entretenimiento', tipoDestino: 'general', subcategorias: ['Streaming', 'Salidas', 'Eventos'] },
+  { nombre: 'Vehículo', tipoDestino: 'vehiculo', subcategorias: ['Combustible', 'Service', 'Seguro', 'Patente', 'Reparación', 'Lavado'] },
+  { nombre: 'Casa', tipoDestino: 'hogar', subcategorias: ['UTE', 'OSE', 'Internet', 'Alquiler', 'Gastos comunes', 'Mantenimiento', 'Impuestos'] },
+  { nombre: 'Tarjeta de crédito', tipoDestino: 'tarjeta', subcategorias: ['Pago de tarjeta', 'Cuotas', 'Intereses', 'Comisiones'] },
+];
+
+const normalizarSubcategorias = (items = []) => (
+  items
+    .map(item => {
+      const nombre = getSubcategoriaNombre(item);
+      return nombre ? { nombre, fija: Boolean(item?.fija) } : null;
+    })
+    .filter(Boolean)
+);
+
+const unificarSubcategoriasLista = (base = [], extra = []) => {
+  const resultado = normalizarSubcategorias(base);
+  const existentes = new Set(resultado.map(item => normalizar(item.nombre)));
+
+  normalizarSubcategorias(extra).forEach((subcategoria) => {
+    const key = normalizar(subcategoria.nombre);
+    if (!key || existentes.has(key)) return;
+    existentes.add(key);
+    resultado.push(subcategoria);
+  });
+
+  return resultado;
+};
+
+const commitBatchUpdates = async (updatesMap) => {
+  const updates = [...updatesMap.values()];
+  let total = 0;
+
+  for (let index = 0; index < updates.length; index += 450) {
+    const batch = writeBatch(db);
+    updates.slice(index, index + 450).forEach(({ ref, data }) => batch.update(ref, data));
+    await batch.commit();
+    total += Math.min(450, updates.length - index);
+  }
+
+  return total;
+};
 
 export default function AdminPanel({ user }) {
   const [categorias, setCategorias] = useState([]);
@@ -30,6 +79,7 @@ export default function AdminPanel({ user }) {
   const [mergeSubOrigen, setMergeSubOrigen] = useState('');
   const [mergeSubDestino, setMergeSubDestino] = useState('');
   const [priceJobStatus, setPriceJobStatus] = useState('');
+  const [seedStatus, setSeedStatus] = useState('');
 
   useEffect(() => {
     const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
@@ -80,6 +130,16 @@ export default function AdminPanel({ user }) {
     const nombre = categoriaNombre.trim();
     if (!nombre) return;
 
+    const existente = categoriasOrdenadas.find(categoria => (
+      (categoria.tipoDestino || 'general') === categoriaTipo
+      && normalizar(categoria.nombre) === normalizar(nombre)
+    ));
+
+    if (existente) {
+      alert('Esa categoría ya existe. Podés agregar subcategorías dentro de la existente.');
+      return;
+    }
+
     try {
       await addDoc(collection(db, 'categorias'), {
         nombre,
@@ -117,7 +177,14 @@ export default function AdminPanel({ user }) {
   };
 
   const aprobarSugerencia = async (sugerencia) => {
-    const categoria = categorias.find(cat => cat.id === sugerencia.categoriaId);
+    let categoria = categorias.find(cat => cat.id === sugerencia.categoriaId);
+    if (!categoria) {
+      const categoriaSugeridaId = String(sugerencia.categoriaId || '').replace('sugerida-', '');
+      const categoriaSugerida = categoriaSugerencias.find(item => item.id === categoriaSugeridaId);
+      if (categoriaSugerida) {
+        categoria = await aprobarCategoria(categoriaSugerida);
+      }
+    }
     if (!categoria) return;
 
     const subcategorias = Array.isArray(categoria.subcategorias) ? categoria.subcategorias : [];
@@ -128,16 +195,81 @@ export default function AdminPanel({ user }) {
         subcategorias: [...subcategorias, { nombre: sugerencia.nombre, fija: false }],
       });
     }
-    await updateDoc(doc(db, 'subcategoria_sugerencias', sugerencia.id), { estado: 'aprobada' });
+    await updateDoc(doc(db, 'subcategoria_sugerencias', sugerencia.id), {
+      estado: 'aprobada',
+      categoriaId: categoria.id,
+      categoriaNombre: categoria.nombre,
+    });
   };
 
   const aprobarCategoria = async (sugerencia) => {
-    await addDoc(collection(db, 'categorias'), {
+    const tipoDestino = sugerencia.tipoDestino || 'general';
+    const existente = categoriasOrdenadas.find(categoria => (
+      (categoria.tipoDestino || 'general') === tipoDestino
+      && normalizar(categoria.nombre) === normalizar(sugerencia.nombre)
+    ));
+
+    if (existente) {
+      await updateDoc(doc(db, 'categorias', existente.id), {
+        subcategorias: unificarSubcategoriasLista(existente.subcategorias, sugerencia.subcategorias),
+        updatedAt: serverTimestamp(),
+      });
+      await updateDoc(doc(db, 'categoria_sugerencias', sugerencia.id), {
+        estado: 'aprobada',
+        categoriaId: existente.id,
+      });
+      await migrarReferenciasCategoriaSugerida(sugerencia, existente);
+      return existente;
+    }
+
+    const docRef = await addDoc(collection(db, 'categorias'), {
       nombre: sugerencia.nombre,
-      tipoDestino: sugerencia.tipoDestino || 'general',
-      subcategorias: sugerencia.subcategorias || [],
+      tipoDestino,
+      subcategorias: normalizarSubcategorias(sugerencia.subcategorias),
     });
-    await updateDoc(doc(db, 'categoria_sugerencias', sugerencia.id), { estado: 'aprobada' });
+    await updateDoc(doc(db, 'categoria_sugerencias', sugerencia.id), { estado: 'aprobada', categoriaId: docRef.id });
+    const destino = { id: docRef.id, nombre: sugerencia.nombre, tipoDestino };
+    await migrarReferenciasCategoriaSugerida(sugerencia, destino);
+    return destino;
+  };
+
+  const cargarCategoriasBase = async () => {
+    setSeedStatus('Revisando categorías base...');
+    try {
+      const existentes = categoriasOrdenadas;
+      let creadas = 0;
+      let actualizadas = 0;
+
+      for (const categoriaBase of CATEGORIAS_BASE) {
+        const existente = existentes.find(categoria => (
+          (categoria.tipoDestino || 'general') === categoriaBase.tipoDestino
+          && normalizar(categoria.nombre) === normalizar(categoriaBase.nombre)
+        ));
+
+        if (existente) {
+          const subcategorias = unificarSubcategoriasLista(existente.subcategorias, categoriaBase.subcategorias);
+          if (subcategorias.length !== (existente.subcategorias || []).length) {
+            await updateDoc(doc(db, 'categorias', existente.id), {
+              subcategorias,
+              updatedAt: serverTimestamp(),
+            });
+            actualizadas += 1;
+          }
+        } else {
+          await addDoc(collection(db, 'categorias'), {
+            nombre: categoriaBase.nombre,
+            tipoDestino: categoriaBase.tipoDestino,
+            subcategorias: normalizarSubcategorias(categoriaBase.subcategorias),
+            createdAt: serverTimestamp(),
+          });
+          creadas += 1;
+        }
+      }
+
+      setSeedStatus(`Listo: ${creadas} creadas, ${actualizadas} actualizadas.`);
+    } catch (error) {
+      setSeedStatus(error.message || 'No se pudieron cargar las categorías base.');
+    }
   };
 
   const handleAddAdmin = async () => {
@@ -157,6 +289,36 @@ export default function AdminPanel({ user }) {
     }
   };
 
+  const migrarReferenciasCategoriaSugerida = async (sugerencia, destino) => {
+    const updates = new Map();
+    const addUpdate = (ref, data) => {
+      const actual = updates.get(ref.path);
+      updates.set(ref.path, { ref, data: { ...(actual?.data || {}), ...data } });
+    };
+
+    const gastosPorSugerencia = await getDocs(query(collection(db, 'gastos'), where('categoriaId', '==', `sugerida-${sugerencia.id}`)));
+    gastosPorSugerencia.forEach((item) => addUpdate(item.ref, {
+      categoriaId: destino.id,
+      categoriaGrupo: destino.nombre,
+      tipoDestino: destino.tipoDestino || sugerencia.tipoDestino || 'general',
+      updatedAt: serverTimestamp(),
+    }));
+
+    const subcategoriasPorSugerencia = await getDocs(query(collection(db, 'subcategoria_sugerencias'), where('categoriaId', '==', sugerencia.id)));
+    subcategoriasPorSugerencia.forEach((item) => addUpdate(item.ref, {
+      categoriaId: destino.id,
+      categoriaNombre: destino.nombre,
+    }));
+
+    const subcategoriasPorSugerida = await getDocs(query(collection(db, 'subcategoria_sugerencias'), where('categoriaId', '==', `sugerida-${sugerencia.id}`)));
+    subcategoriasPorSugerida.forEach((item) => addUpdate(item.ref, {
+      categoriaId: destino.id,
+      categoriaNombre: destino.nombre,
+    }));
+
+    await commitBatchUpdates(updates);
+  };
+
   const mergeCategorias = async () => {
     if (!mergeCategoriaOrigen || !mergeCategoriaDestino || mergeCategoriaOrigen === mergeCategoriaDestino) return;
 
@@ -164,18 +326,7 @@ export default function AdminPanel({ user }) {
     const destino = categoriasOrdenadas.find(categoria => categoria.id === mergeCategoriaDestino);
     if (!origen || !destino) return;
 
-    const subcategoriasDestino = Array.isArray(destino.subcategorias) ? destino.subcategorias : [];
-    const subcategoriasOrigen = Array.isArray(origen.subcategorias) ? origen.subcategorias : [];
-    const nombresDestino = new Set(subcategoriasDestino.map(sub => normalizar(getSubcategoriaNombre(sub))));
-    const subcategoriasUnificadas = [
-      ...subcategoriasDestino,
-      ...subcategoriasOrigen.filter(sub => {
-        const nombre = normalizar(getSubcategoriaNombre(sub));
-        if (!nombre || nombresDestino.has(nombre)) return false;
-        nombresDestino.add(nombre);
-        return true;
-      }),
-    ];
+    const subcategoriasUnificadas = unificarSubcategoriasLista(destino.subcategorias, origen.subcategorias);
 
     try {
       await updateDoc(doc(db, 'categorias', destino.id), {
@@ -187,6 +338,42 @@ export default function AdminPanel({ user }) {
         mergedIntoNombre: destino.nombre,
         mergedAt: serverTimestamp(),
       });
+
+      const updates = new Map();
+      const addUpdate = (ref, data) => {
+        const actual = updates.get(ref.path);
+        updates.set(ref.path, { ref, data: { ...(actual?.data || {}), ...data } });
+      };
+
+      const gastosPorId = await getDocs(query(collection(db, 'gastos'), where('categoriaId', '==', origen.id)));
+      gastosPorId.forEach((item) => addUpdate(item.ref, {
+        categoriaId: destino.id,
+        categoriaGrupo: destino.nombre,
+        categoria: item.data().categoria === origen.nombre ? destino.nombre : item.data().categoria,
+        updatedAt: serverTimestamp(),
+      }));
+
+      const gastosPorNombre = await getDocs(query(collection(db, 'gastos'), where('categoriaGrupo', '==', origen.nombre)));
+      gastosPorNombre.forEach((item) => addUpdate(item.ref, {
+        categoriaId: destino.id,
+        categoriaGrupo: destino.nombre,
+        categoria: item.data().categoria === origen.nombre ? destino.nombre : item.data().categoria,
+        updatedAt: serverTimestamp(),
+      }));
+
+      const presupuestosPorNombre = await getDocs(query(collection(db, 'presupuestos'), where('categoriaGrupo', '==', origen.nombre)));
+      presupuestosPorNombre.forEach((item) => addUpdate(item.ref, {
+        categoriaGrupo: destino.nombre,
+        updatedAt: serverTimestamp(),
+      }));
+
+      const sugerenciasPorCategoria = await getDocs(query(collection(db, 'subcategoria_sugerencias'), where('categoriaId', '==', origen.id)));
+      sugerenciasPorCategoria.forEach((item) => addUpdate(item.ref, {
+        categoriaId: destino.id,
+        categoriaNombre: destino.nombre,
+      }));
+
+      await commitBatchUpdates(updates);
       setMergeCategoriaOrigen('');
       setMergeCategoriaDestino('');
     } catch (error) {
@@ -210,6 +397,42 @@ export default function AdminPanel({ user }) {
         subcategorias: nuevas,
         updatedAt: serverTimestamp(),
       });
+
+      const updates = new Map();
+      const addUpdate = (ref, data) => {
+        const actual = updates.get(ref.path);
+        updates.set(ref.path, { ref, data: { ...(actual?.data || {}), ...data } });
+      };
+
+      const gastosPorSubcategoria = await getDocs(query(collection(db, 'gastos'), where('subcategoria', '==', mergeSubOrigen)));
+      gastosPorSubcategoria.forEach((item) => {
+        const data = item.data();
+        if (data.categoriaGrupo !== categoriaSubMerge.nombre && data.categoriaId !== categoriaSubMerge.id) return;
+        addUpdate(item.ref, {
+          categoria: data.categoria === mergeSubOrigen ? mergeSubDestino : data.categoria,
+          subcategoria: mergeSubDestino,
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      const presupuestosPorSubcategoria = await getDocs(query(collection(db, 'presupuestos'), where('subcategoria', '==', mergeSubOrigen)));
+      presupuestosPorSubcategoria.forEach((item) => {
+        const data = item.data();
+        if (data.categoriaGrupo !== categoriaSubMerge.nombre) return;
+        addUpdate(item.ref, {
+          subcategoria: mergeSubDestino,
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      const sugerenciasPorNombre = await getDocs(query(collection(db, 'subcategoria_sugerencias'), where('nombre', '==', mergeSubOrigen)));
+      sugerenciasPorNombre.forEach((item) => {
+        const data = item.data();
+        if (data.categoriaId !== categoriaSubMerge.id && data.categoriaNombre !== categoriaSubMerge.nombre) return;
+        addUpdate(item.ref, { nombre: mergeSubDestino });
+      });
+
+      await commitBatchUpdates(updates);
       setMergeSubOrigen('');
       setMergeSubDestino('');
     } catch (error) {
@@ -390,7 +613,16 @@ export default function AdminPanel({ user }) {
       </div>
 
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
-        <h2 className="text-xl font-bold text-zinc-800 mb-4">Categorías</h2>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-xl font-bold text-zinc-800">Categorías</h2>
+            <p className="text-sm text-zinc-500">Mantené pocas categorías madres y usá subcategorías para el detalle real.</p>
+          </div>
+          <button onClick={cargarCategoriasBase} className="px-4 py-3 rounded-2xl bg-emerald-50 text-emerald-700 border border-emerald-100 font-bold text-sm">
+            Cargar base
+          </button>
+        </div>
+        {seedStatus && <p className="mb-4 text-sm font-bold text-zinc-600">{seedStatus}</p>}
         <div className="space-y-3 mb-5">
           <input
             type="text"
