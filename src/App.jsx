@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react';
 import { auth, db, loginConGoogle, logout } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { History, LogOut, Plus, BarChart3, Wallet, Settings, User } from 'lucide-react';
+import { History, LogOut, Plus, BarChart3, Settings, User } from 'lucide-react';
 import ExpenseForm from './components/ExpenseForm';
 import Dashboard from './components/Dashboard';
 import AdminPanel from './components/AdminPanel';
 import EntitiesManager from './components/EntitiesManager';
 import ExpenseHistory from './components/ExpenseHistory';
+import LandingPage from './components/LandingPage';
 
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'renzodogliotti@gmail.com';
 
@@ -59,26 +60,7 @@ function App() {
       }
     };
 
-    return (
-      <div className="flex h-[100dvh] items-center justify-center bg-zinc-900 p-6">
-        <div className="bg-zinc-800 p-8 rounded-[2rem] shadow-2xl text-center w-full max-w-sm border border-zinc-700">
-          <div className="bg-emerald-500 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-500/30">
-            <Wallet color="white" size={32} />
-          </div>
-          <h1 className="text-3xl font-extrabold mb-2 text-white">Gasting</h1>
-          <p className="text-zinc-400 mb-8 text-sm">Controlá tus números de forma inteligente.</p>
-          <button 
-            onClick={handleLogin}
-            className="w-full bg-white text-zinc-900 font-bold py-4 rounded-2xl hover:bg-zinc-100 transition-all active:scale-95"
-          >
-            Continuar con Google
-          </button>
-          {loginError && (
-            <p className="mt-4 text-sm font-medium text-red-300">{loginError}</p>
-          )}
-        </div>
-      </div>
-    );
+    return <LandingPage onLogin={handleLogin} loginError={loginError} />;
   }
 
   return (
