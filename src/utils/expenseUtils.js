@@ -7,6 +7,12 @@ export const TIPOS_DESTINO = [
 
 export const normalizar = (valor = '') => valor.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
+export const normalizarProducto = (valor = '') => normalizar(valor)
+  .replace(/[^a-z0-9\s.,]/g, ' ')
+  .replace(/\b(un|una|el|la|los|las|de|del|x)\b/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
 export const getSubcategoriaNombre = (subcategoria) => (
   typeof subcategoria === 'string' ? subcategoria : subcategoria?.nombre || ''
 );
@@ -48,5 +54,6 @@ export const suggestionToExpensePayload = ({ sugerencia, userId, categorias, sou
       estado: 'analizado_sin_storage',
     } : null,
     origen,
+    estadoRevision: origen === 'documento_ia' || origen === 'voz_ia' ? 'pendiente_revision' : 'confirmado',
   };
 };

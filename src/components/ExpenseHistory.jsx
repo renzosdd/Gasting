@@ -96,6 +96,7 @@ export default function ExpenseHistory({ user }) {
       categoriaGrupo: categoriaNombre,
       categoria: form.subcategoria || categoriaNombre,
       subcategoria: form.subcategoria,
+      estadoRevision: 'confirmado',
     });
     cancelar();
   };
@@ -176,6 +177,9 @@ export default function ExpenseHistory({ user }) {
                   </div>
                   <p className="font-bold text-zinc-700 truncate">{gasto.subcategoria || gasto.categoria}</p>
                   <p className="text-sm text-zinc-500 truncate">{gasto.categoriaGrupo || 'Sin categoría'} · {gasto.tipoDestino || 'general'}</p>
+                  {gasto.estadoRevision === 'pendiente_revision' && (
+                    <p className="inline-flex mt-1 px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black">Pendiente de revisar</p>
+                  )}
                   {(gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre) && (
                     <p className="text-xs font-bold text-emerald-600 mt-1">{gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre}</p>
                   )}

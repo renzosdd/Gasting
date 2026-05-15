@@ -3,7 +3,7 @@ import { db } from '../firebase';
 import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { CarFront, CreditCard, FileText, Home, Mic, Plus, Sparkles, Wallet, X } from 'lucide-react';
 import { extractTextFromDocument } from '../utils/localOcr';
-import { getSubcategoriaNombre, normalizar, suggestionToExpensePayload } from '../utils/expenseUtils';
+import { getSubcategoriaNombre, normalizar, normalizarProducto, suggestionToExpensePayload } from '../utils/expenseUtils';
 
 const TIPOS_DESTINO = [
   { id: 'general', label: 'General', icon: Wallet },
@@ -378,6 +378,11 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     const batch = writeBatch(db);
     seleccionadas.forEach((sugerencia) => {
       const gastoRef = doc(collection(db, 'gastos'));
+      const productosConfiables = (sugerencia.productos || []).filter(producto => (
+        producto?.nombre
+        && Number(producto.confianza || 0) >= 0.72
+        && Number(producto.precioTotal || 0) > 0
+      ));
       batch.set(gastoRef, {
         ...suggestionToExpensePayload({
           sugerencia,
@@ -385,7 +390,29 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
           categorias: categoriasDisponibles,
           sourceFileName: estadoCuentaFile?.name || '',
         }),
+        tieneProductos: productosConfiables.length > 0,
         fecha: serverTimestamp(),
+      });
+      productosConfiables.forEach((producto) => {
+        const productoRef = doc(collection(db, 'producto_precios'));
+        const nombreNormalizado = normalizarProducto(producto.nombre);
+        batch.set(productoRef, {
+          userId: user.uid,
+          gastoId: gastoRef.id,
+          nombre: producto.nombre,
+          nombreNormalizado,
+          marca: producto.marca || '',
+          cantidad: Number(producto.cantidad || 1),
+          unidad: producto.unidad || 'unidad',
+          precioUnitario: Number(producto.precioUnitario || 0),
+          precioTotal: Number(producto.precioTotal || 0),
+          moneda: sugerencia.moneda || 'UYU',
+          comercio: sugerencia.descripcion || '',
+          confianza: Number(producto.confianza || 0),
+          fecha: serverTimestamp(),
+          origen: sugerencia.source === 'voz' ? 'voz_ia' : 'documento_ia',
+          estadoAgregado: 'pendiente_anonimizar',
+        });
       });
     });
 
@@ -442,6 +469,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
         estadoCuenta,
         estadoCuentaPendiente: tipoDestino === 'tarjeta' && !estadoCuenta,
         origen: tipoDestino === 'tarjeta' ? 'tarjeta_credito' : 'manual',
+        estadoRevision: 'confirmado',
         fecha: serverTimestamp(),
       });
 
@@ -813,6 +841,14 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
                               )}
                             </select>
                           </div>
+                          {(sugerencia.productos || []).filter(producto => Number(producto.confianza || 0) >= 0.72).length > 0 && (
+                            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3">
+                              <p className="text-xs font-black text-emerald-700">
+                                {(sugerencia.productos || []).filter(producto => Number(producto.confianza || 0) >= 0.72).length} productos detectados con buena confianza
+                              </p>
+                              <p className="mt-1 text-xs text-emerald-700/70">Se guardan para comparar precios de forma agregada.</p>
+                            </div>
+                          )}
                           {sugerencia.notas && <p className="text-xs text-zinc-400">{sugerencia.notas}</p>}
                         </div>
                       </div>

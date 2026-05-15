@@ -18,8 +18,25 @@ const JSON_SCHEMA = {
           fecha: { type: 'string' },
           confianza: { type: 'number' },
           notas: { type: 'string' },
+          productos: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                nombre: { type: 'string' },
+                marca: { type: 'string' },
+                cantidad: { type: 'number' },
+                unidad: { type: 'string' },
+                precioUnitario: { type: 'number' },
+                precioTotal: { type: 'number' },
+                confianza: { type: 'number' },
+              },
+              required: ['nombre', 'marca', 'cantidad', 'unidad', 'precioUnitario', 'precioTotal', 'confianza'],
+            },
+          },
         },
-        required: ['descripcion', 'monto', 'moneda', 'tipoDestino', 'categoriaGrupo', 'subcategoria', 'fecha', 'confianza', 'notas'],
+        required: ['descripcion', 'monto', 'moneda', 'tipoDestino', 'categoriaGrupo', 'subcategoria', 'fecha', 'confianza', 'notas', 'productos'],
       },
     },
   },
@@ -102,6 +119,10 @@ Objetivo:
 - Si es ticket/boleta:
   - sugerir un gasto único cuando no convenga separar líneas;
   - separar líneas solo si son importes claros y útiles.
+  - si es supermercado o comercio con productos, completar "productos" solo con líneas de buena confianza;
+  - para productos, extraer cantidad, unidad, precio unitario y total cuando estén claros;
+  - si hay peso, usar unidad "kg" o "g"; si son unidades, usar "unidad";
+  - no completar productos dudosos, promociones ambiguas, redondeos, impuestos o líneas sin precio claro.
 - Si es factura de servicio:
   - usar tipoDestino "hogar" cuando corresponda;
   - extraer vencimiento en "fecha" si aparece.

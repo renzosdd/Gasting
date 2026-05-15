@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { db, storage } from '../firebase';
-import { addDoc, collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { CarFront, CreditCard, Edit3, Home, Image as ImageIcon, MapPin, Plus, Trash2, X } from 'lucide-react';
+import { CarFront, CreditCard, Edit3, Home, Image as ImageIcon, MapPin, Plus, Target, Trash2, Users, X } from 'lucide-react';
+import { getSubcategoriaNombre } from '../utils/expenseUtils';
 
 const EMPTY_VEHICULO = { nombre: '', marca: '', modelo: '', anio: '', tipo_motor: 'Nafta', kilometraje_actual: '', fotoUrl: '' };
-const EMPTY_HOGAR = { nombre: '', direccion: '', fotoUrl: '', servicios: [] };
+const EMPTY_HOGAR = { nombre: '', direccion: '', fotoUrl: '', servicios: [], miembrosEmails: '' };
 const EMPTY_TARJETA = { nombre: '', banco: '', marca: 'Visa', ultimos4: '', diaCierre: '', diaVencimiento: '' };
 const EMPTY_SERVICIO = { nombre: '', numeroCuenta: '', diaPago: '', proveedor: '' };
+const EMPTY_PRESUPUESTO = { nombre: '', monto: '', moneda: 'UYU', hogarId: '', categoriaGrupo: '', subcategoria: '' };
 
 const compressImage = (file, maxSize = 900, quality = 0.72) => new Promise((resolve, reject) => {
   const image = new Image();
@@ -41,6 +43,8 @@ export default function EntitiesManager({ user }) {
   const [vehiculos, setVehiculos] = useState([]);
   const [hogares, setHogares] = useState([]);
   const [tarjetas, setTarjetas] = useState([]);
+  const [categorias, setCategorias] = useState([]);
+  const [presupuestos, setPresupuestos] = useState([]);
   const [editandoId, setEditandoId] = useState(null);
   const [formVehiculo, setFormVehiculo] = useState(EMPTY_VEHICULO);
   const [formHogar, setFormHogar] = useState(EMPTY_HOGAR);
@@ -48,13 +52,18 @@ export default function EntitiesManager({ user }) {
   const [fotoVehiculoFile, setFotoVehiculoFile] = useState(null);
   const [fotoHogarFile, setFotoHogarFile] = useState(null);
   const [servicioForm, setServicioForm] = useState(EMPTY_SERVICIO);
+  const [formPresupuesto, setFormPresupuesto] = useState(EMPTY_PRESUPUESTO);
   const [showServicioForm, setShowServicioForm] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const vehiculosQuery = query(collection(db, 'vehiculos'), where('propietarios', 'array-contains', user.uid));
     const hogaresQuery = query(collection(db, 'hogares'), where('propietarios', 'array-contains', user.uid));
+    const hogaresCompartidosQuery = user.email
+      ? query(collection(db, 'hogares'), where('miembrosEmails', 'array-contains', user.email.toLowerCase()))
+      : null;
     const tarjetasQuery = query(collection(db, 'tarjetas'), where('propietarios', 'array-contains', user.uid));
+    const presupuestosQuery = query(collection(db, 'presupuestos'), where('miembros', 'array-contains', user.uid));
 
     const unsubVehiculos = onSnapshot(vehiculosQuery, (snapshot) => {
       setVehiculos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -62,18 +71,36 @@ export default function EntitiesManager({ user }) {
     const unsubHogares = onSnapshot(hogaresQuery, (snapshot) => {
       setHogares(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
+    const unsubHogaresCompartidos = hogaresCompartidosQuery ? onSnapshot(hogaresCompartidosQuery, (snapshot) => {
+      setHogares((actual) => {
+        const items = [...actual, ...snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))];
+        return [...new Map(items.map(item => [item.id, item])).values()];
+      });
+    }) : () => {};
     const unsubTarjetas = onSnapshot(tarjetasQuery, (snapshot) => {
       setTarjetas(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
+    const unsubPresupuestos = onSnapshot(presupuestosQuery, (snapshot) => {
+      setPresupuestos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubCategorias = onSnapshot(collection(db, 'categorias'), (snapshot) => {
+      setCategorias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
 
-    return () => { unsubVehiculos(); unsubHogares(); unsubTarjetas(); };
-  }, [user.uid]);
+    return () => { unsubVehiculos(); unsubHogares(); unsubHogaresCompartidos(); unsubTarjetas(); unsubPresupuestos(); unsubCategorias(); };
+  }, [user.email, user.uid]);
+
+  const subcategoriasPresupuesto = useMemo(() => {
+    const categoria = categorias.find(item => item.nombre === formPresupuesto.categoriaGrupo);
+    return Array.isArray(categoria?.subcategorias) ? categoria.subcategorias.map(getSubcategoriaNombre).filter(Boolean) : [];
+  }, [categorias, formPresupuesto.categoriaGrupo]);
 
   const reset = () => {
     setEditandoId(null);
     setFormVehiculo(EMPTY_VEHICULO);
     setFormHogar(EMPTY_HOGAR);
     setFormTarjeta(EMPTY_TARJETA);
+    setFormPresupuesto(EMPTY_PRESUPUESTO);
     setFotoVehiculoFile(null);
     setFotoHogarFile(null);
     setServicioForm(EMPTY_SERVICIO);
@@ -100,7 +127,13 @@ export default function EntitiesManager({ user }) {
 
   const editarHogar = (hogar) => {
     setEditandoId(hogar.id);
-    setFormHogar({ nombre: hogar.nombre || '', direccion: hogar.direccion || '', fotoUrl: hogar.fotoUrl || '', servicios: hogar.servicios || [] });
+    setFormHogar({
+      nombre: hogar.nombre || '',
+      direccion: hogar.direccion || '',
+      fotoUrl: hogar.fotoUrl || '',
+      servicios: hogar.servicios || [],
+      miembrosEmails: (hogar.miembrosEmails || []).join(', '),
+    });
   };
 
   const editarTarjeta = (tarjeta) => {
@@ -180,6 +213,10 @@ export default function EntitiesManager({ user }) {
         direccion: formHogar.direccion,
         fotoUrl: fotoUrl || formHogar.fotoUrl || null,
         servicios: formHogar.servicios || [],
+        miembrosEmails: formHogar.miembrosEmails
+          .split(',')
+          .map(email => email.trim().toLowerCase())
+          .filter(Boolean),
       };
       if (editandoId && editandoId !== 'nuevo') await updateDoc(doc(db, 'hogares', editandoId), payload);
       else await addDoc(collection(db, 'hogares'), payload);
@@ -188,6 +225,53 @@ export default function EntitiesManager({ user }) {
       alert('Error al guardar hogar: ' + error.message);
     }
     setLoading(false);
+  };
+
+  const guardarPresupuesto = async (e) => {
+    e.preventDefault();
+    const monto = Number(formPresupuesto.monto || 0);
+    if (!monto || monto <= 0) return;
+
+    const hogar = hogares.find(item => item.id === formPresupuesto.hogarId);
+    const payload = {
+      userId: user.uid,
+      miembros: [user.uid],
+      nombre: formPresupuesto.nombre || formPresupuesto.categoriaGrupo || 'Presupuesto mensual',
+      monto,
+      moneda: formPresupuesto.moneda,
+      hogarId: formPresupuesto.hogarId || null,
+      hogarNombre: hogar?.nombre || '',
+      categoriaGrupo: formPresupuesto.categoriaGrupo || '',
+      subcategoria: formPresupuesto.subcategoria || '',
+      periodo: 'mensual',
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      if (editandoId && editandoId !== 'nuevo') await updateDoc(doc(db, 'presupuestos', editandoId), payload);
+      else await addDoc(collection(db, 'presupuestos'), { ...payload, createdAt: serverTimestamp() });
+      reset();
+    } catch (error) {
+      alert('Error al guardar presupuesto: ' + error.message);
+    }
+  };
+
+  const editarPresupuesto = (presupuesto) => {
+    setEditandoId(presupuesto.id);
+    setFormPresupuesto({
+      nombre: presupuesto.nombre || '',
+      monto: presupuesto.monto || '',
+      moneda: presupuesto.moneda || 'UYU',
+      hogarId: presupuesto.hogarId || '',
+      categoriaGrupo: presupuesto.categoriaGrupo || '',
+      subcategoria: presupuesto.subcategoria || '',
+    });
+  };
+
+  const eliminarPresupuesto = async (presupuestoId) => {
+    if (window.confirm('¿Eliminar este presupuesto?')) {
+      await deleteDoc(doc(db, 'presupuestos', presupuestoId));
+    }
   };
 
   const guardarTarjeta = async (e) => {
@@ -213,12 +297,13 @@ export default function EntitiesManager({ user }) {
   };
 
   const creando = editandoId === 'nuevo';
+  const esPropietario = (entidad) => Array.isArray(entidad.propietarios) && entidad.propietarios.includes(user.uid);
 
   return (
     <div className="pt-4 animate-in fade-in duration-500">
       <h2 className="text-2xl font-extrabold text-zinc-800 mb-6">Mis Entidades</h2>
 
-      <div className="grid grid-cols-3 bg-zinc-200/50 p-1 rounded-2xl mb-6">
+      <div className="grid grid-cols-4 bg-zinc-200/50 p-1 rounded-2xl mb-6">
         <button onClick={() => cambiarTab('vehiculos')} className={`flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'vehiculos' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}>
           <CarFront size={18} /> Autos
         </button>
@@ -227,6 +312,9 @@ export default function EntitiesManager({ user }) {
         </button>
         <button onClick={() => cambiarTab('tarjetas')} className={`flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'tarjetas' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}>
           <CreditCard size={18} /> Tarjetas
+        </button>
+        <button onClick={() => cambiarTab('presupuestos')} className={`flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all ${tab === 'presupuestos' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'}`}>
+          <Target size={18} /> Plan
         </button>
       </div>
 
@@ -300,7 +388,11 @@ export default function EntitiesManager({ user }) {
                 <p className="text-sm text-zinc-500 flex items-center gap-1"><MapPin size={14} /> {hogar.direccion || 'Sin dirección'}</p>
                 <p className="text-xs font-bold text-zinc-600 mt-1">{(hogar.servicios || []).length} servicios</p>
               </div>
-              <button onClick={() => editarHogar(hogar)} className="p-3 rounded-full bg-zinc-50 text-zinc-500"><Edit3 size={18} /></button>
+              {esPropietario(hogar) ? (
+                <button onClick={() => editarHogar(hogar)} className="p-3 rounded-full bg-zinc-50 text-zinc-500"><Edit3 size={18} /></button>
+              ) : (
+                <span className="px-3 py-2 rounded-full bg-zinc-100 text-zinc-500 text-xs font-bold">Compartido</span>
+              )}
             </div>
           ))}
           {!editandoId && <button onClick={() => setEditandoId('nuevo')} className="w-full bg-blue-50 border border-blue-200 text-blue-700 font-bold py-4 rounded-3xl flex items-center justify-center gap-2"><Plus size={20} /> Registrar Hogar</button>}
@@ -322,6 +414,19 @@ export default function EntitiesManager({ user }) {
               </label>
               <input value={formHogar.nombre} onChange={e => setFormHogar({ ...formHogar, nombre: e.target.value })} placeholder="Nombre" required className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none" />
               <input value={formHogar.direccion} onChange={e => setFormHogar({ ...formHogar, direccion: e.target.value })} placeholder="Dirección" className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none" />
+              <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-2xl">
+                <div className="flex items-center gap-2 mb-2">
+                  <Users size={18} className="text-zinc-500" />
+                  <p className="text-sm font-bold text-zinc-700">Compartir hogar</p>
+                </div>
+                <input
+                  value={formHogar.miembrosEmails}
+                  onChange={e => setFormHogar({ ...formHogar, miembrosEmails: e.target.value })}
+                  placeholder="emails separados por coma"
+                  className="w-full p-3 bg-white border border-zinc-200 rounded-xl outline-none"
+                />
+                <p className="mt-2 text-xs text-zinc-400">Los emails quedan listos para acceso compartido cuando las reglas estén publicadas.</p>
+              </div>
               <div className="space-y-3 p-4 bg-blue-50 border border-blue-100 rounded-2xl">
                 <p className="text-xs font-bold uppercase tracking-wider text-blue-700">Servicios</p>
                 {(formHogar.servicios || []).map((servicio, index) => (
@@ -355,6 +460,55 @@ export default function EntitiesManager({ user }) {
                 )}
               </div>
               <button type="submit" disabled={loading} className="w-full p-4 rounded-2xl font-bold text-white bg-blue-600 disabled:opacity-50">{loading ? 'Guardando...' : 'Guardar'}</button>
+            </form>
+          )}
+        </div>
+      )}
+
+      {tab === 'presupuestos' && (
+        <div className="space-y-6">
+          {!editandoId && presupuestos.map(presupuesto => (
+            <div key={presupuesto.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-100 flex gap-4 items-center">
+              <div className="w-16 h-16 rounded-2xl bg-amber-50 flex-shrink-0 flex items-center justify-center text-amber-600 border border-amber-100"><Target size={28} /></div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-lg font-bold text-zinc-800 leading-tight">{presupuesto.nombre}</h3>
+                <p className="text-sm text-zinc-500">{presupuesto.categoriaGrupo || 'Todas las categorías'}{presupuesto.subcategoria ? ` · ${presupuesto.subcategoria}` : ''}</p>
+                <p className="text-xs font-bold text-zinc-600 mt-1">{presupuesto.moneda === 'USD' ? 'US$' : '$'}{Number(presupuesto.monto || 0).toLocaleString('es-UY')} mensual {presupuesto.hogarNombre ? `· ${presupuesto.hogarNombre}` : ''}</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <button onClick={() => editarPresupuesto(presupuesto)} className="p-3 rounded-full bg-zinc-50 text-zinc-500"><Edit3 size={18} /></button>
+                <button onClick={() => eliminarPresupuesto(presupuesto.id)} className="p-3 rounded-full bg-red-50 text-red-500"><Trash2 size={18} /></button>
+              </div>
+            </div>
+          ))}
+          {!editandoId && <button onClick={() => setEditandoId('nuevo')} className="w-full bg-amber-50 border border-amber-200 text-amber-700 font-bold py-4 rounded-3xl flex items-center justify-center gap-2"><Plus size={20} /> Crear Presupuesto</button>}
+          {editandoId && (
+            <form onSubmit={guardarPresupuesto} className="bg-white p-6 rounded-3xl shadow-sm border border-zinc-100 space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="font-bold text-zinc-800 text-lg">{creando ? 'Nuevo Presupuesto' : 'Editar Presupuesto'}</h3>
+                <button type="button" onClick={reset} className="p-2 text-zinc-400"><X size={20} /></button>
+              </div>
+              <input value={formPresupuesto.nombre} onChange={e => setFormPresupuesto({ ...formPresupuesto, nombre: e.target.value })} placeholder="Nombre (Super del mes)" className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none" />
+              <div className="grid grid-cols-2 gap-3">
+                <input type="number" value={formPresupuesto.monto} onChange={e => setFormPresupuesto({ ...formPresupuesto, monto: e.target.value })} placeholder="Monto mensual" required className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none" />
+                <select value={formPresupuesto.moneda} onChange={e => setFormPresupuesto({ ...formPresupuesto, moneda: e.target.value })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
+                  <option value="UYU">Pesos</option>
+                  <option value="USD">Dólares</option>
+                </select>
+              </div>
+              <select value={formPresupuesto.hogarId} onChange={e => setFormPresupuesto({ ...formPresupuesto, hogarId: e.target.value })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
+                <option value="">Personal / todos mis gastos</option>
+                {hogares.map(hogar => <option key={hogar.id} value={hogar.id}>{hogar.nombre}</option>)}
+              </select>
+              <select value={formPresupuesto.categoriaGrupo} onChange={e => setFormPresupuesto({ ...formPresupuesto, categoriaGrupo: e.target.value, subcategoria: '' })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
+                <option value="">Todas las categorías</option>
+                {categorias.map(categoria => <option key={categoria.id} value={categoria.nombre}>{categoria.nombre}</option>)}
+              </select>
+              <select value={formPresupuesto.subcategoria} onChange={e => setFormPresupuesto({ ...formPresupuesto, subcategoria: e.target.value })} className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none">
+                <option value="">Todas las subcategorías</option>
+                {subcategoriasPresupuesto.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+              </select>
+              <button type="submit" className="w-full p-4 rounded-2xl font-bold text-white bg-amber-500">Guardar presupuesto</button>
             </form>
           )}
         </div>

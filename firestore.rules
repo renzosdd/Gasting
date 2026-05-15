@@ -35,6 +35,24 @@ service cloud.firestore {
         && request.auth.uid in resource.data.propietarios;
     }
 
+    function sharedExistingHome() {
+      return signedIn()
+        && resource.data.miembrosEmails is list
+        && request.auth.token.email in resource.data.miembrosEmails;
+    }
+
+    function ownsBudget() {
+      return signedIn()
+        && request.resource.data.miembros is list
+        && request.auth.uid in request.resource.data.miembros;
+    }
+
+    function ownsExistingBudget() {
+      return signedIn()
+        && resource.data.miembros is list
+        && request.auth.uid in resource.data.miembros;
+    }
+
     match /admins/{adminId} {
       allow read: if signedIn() && (request.auth.uid == adminId || isAdmin());
       allow write: if isAdmin();
@@ -76,7 +94,8 @@ service cloud.firestore {
 
     match /hogares/{hogarId} {
       allow create: if ownsNewEntity();
-      allow read, delete: if ownsExistingEntity();
+      allow read: if ownsExistingEntity() || sharedExistingHome();
+      allow delete: if ownsExistingEntity();
       allow update: if ownsExistingEntity() && ownsNewEntity();
     }
 
@@ -84,6 +103,22 @@ service cloud.firestore {
       allow create: if ownsNewEntity();
       allow read, delete: if ownsExistingEntity();
       allow update: if ownsExistingEntity() && ownsNewEntity();
+    }
+
+    match /presupuestos/{presupuestoId} {
+      allow create: if ownsBudget();
+      allow read, delete: if ownsExistingBudget();
+      allow update: if ownsExistingBudget() && ownsBudget();
+    }
+
+    match /producto_precios/{precioId} {
+      allow create: if ownsUserField();
+      allow read, update, delete: if ownsResourceUserField();
+    }
+
+    match /producto_precios_agregados/{agregadoId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
     }
   }
 }
