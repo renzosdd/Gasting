@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
 import { collection, deleteDoc, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { Edit3, Save, Trash2, X } from 'lucide-react';
+import { getCategoriasFiltradas, getSubcategorias, TIPOS_DESTINO } from '../utils/expenseUtils';
 
 const currentMonth = () => {
   const now = new Date();
@@ -21,9 +22,11 @@ const expenseMonth = (gasto) => {
 
 export default function ExpenseHistory({ user }) {
   const [gastos, setGastos] = useState([]);
+  const [categorias, setCategorias] = useState([]);
+  const [categoriasUsuario, setCategoriasUsuario] = useState([]);
   const [mes, setMes] = useState(currentMonth());
   const [editando, setEditando] = useState(null);
-  const [form, setForm] = useState({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoria: '', subcategoria: '' });
+  const [form, setForm] = useState({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '' });
 
   useEffect(() => {
     const q = query(collection(db, 'gastos'), where('userId', '==', user.uid));
@@ -32,6 +35,30 @@ export default function ExpenseHistory({ user }) {
     });
     return () => unsubscribe();
   }, [user.uid]);
+
+  useEffect(() => {
+    const unsubCat = onSnapshot(collection(db, 'categorias'), (snapshot) => {
+      setCategorias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const sugerenciasQuery = query(collection(db, 'categoria_sugerencias'), where('userId', '==', user.uid));
+    const unsubUserCat = onSnapshot(sugerenciasQuery, (snapshot) => {
+      setCategoriasUsuario(snapshot.docs.map(doc => ({ id: `sugerida-${doc.id}`, ...doc.data(), esSugerida: true })));
+    });
+    return () => { unsubCat(); unsubUserCat(); };
+  }, [user.uid]);
+
+  const categoriasDisponibles = useMemo(() => ([
+    ...categorias,
+    ...categoriasUsuario.filter(categoria => categoria.estado !== 'rechazada'),
+  ]), [categorias, categoriasUsuario]);
+
+  const categoriasFiltradas = useMemo(() => (
+    getCategoriasFiltradas(categoriasDisponibles, form.tipoDestino)
+  ), [categoriasDisponibles, form.tipoDestino]);
+
+  const categoriaSeleccionada = categoriasDisponibles.find(categoria => categoria.id === form.categoriaId)
+    || categoriasDisponibles.find(categoria => categoria.nombre === form.categoria);
+  const subcategorias = getSubcategorias(categoriaSeleccionada);
 
   const gastosFiltrados = useMemo(() => (
     gastos
@@ -45,6 +72,7 @@ export default function ExpenseHistory({ user }) {
       monto: gasto.monto || '',
       moneda: gasto.moneda || 'UYU',
       tipoDestino: gasto.tipoDestino || 'general',
+      categoriaId: gasto.categoriaId || '',
       categoria: gasto.categoriaGrupo || '',
       subcategoria: gasto.subcategoria || gasto.categoria || '',
     });
@@ -52,16 +80,21 @@ export default function ExpenseHistory({ user }) {
 
   const cancelar = () => {
     setEditando(null);
-    setForm({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoria: '', subcategoria: '' });
+    setForm({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '' });
   };
 
   const guardar = async (gasto) => {
+    const categoria = categoriasDisponibles.find(item => item.id === form.categoriaId)
+      || categoriasDisponibles.find(item => item.nombre === form.categoria);
+    const categoriaNombre = categoria?.nombre || form.categoria;
+
     await updateDoc(doc(db, 'gastos', gasto.id), {
       monto: Number(form.monto),
       moneda: form.moneda,
       tipoDestino: form.tipoDestino,
-      categoriaGrupo: form.categoria,
-      categoria: form.subcategoria || form.categoria,
+      categoriaId: categoria?.id || form.categoriaId || null,
+      categoriaGrupo: categoriaNombre,
+      categoria: form.subcategoria || categoriaNombre,
       subcategoria: form.subcategoria,
     });
     cancelar();
@@ -104,15 +137,30 @@ export default function ExpenseHistory({ user }) {
                   <option value="UYU">Pesos</option>
                   <option value="USD">Dólares</option>
                 </select>
-                <select value={form.tipoDestino} onChange={e => setForm({ ...form, tipoDestino: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
-                  <option value="general">General</option>
-                  <option value="vehiculo">Vehículo</option>
-                  <option value="hogar">Casa</option>
-                  <option value="tarjeta">Tarjeta</option>
+                <select value={form.tipoDestino} onChange={e => setForm({ ...form, tipoDestino: e.target.value, categoriaId: '', categoria: '', subcategoria: '' })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
+                  {TIPOS_DESTINO.map(tipo => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
                 </select>
                 <div className="grid grid-cols-2 gap-2">
-                  <input value={form.categoria} onChange={e => setForm({ ...form, categoria: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none" placeholder="Categoría" />
-                  <input value={form.subcategoria} onChange={e => setForm({ ...form, subcategoria: e.target.value })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none" placeholder="Subcategoría" />
+                  <select
+                    value={categoriaSeleccionada?.id || form.categoriaId}
+                    onChange={e => {
+                      const categoria = categoriasDisponibles.find(item => item.id === e.target.value);
+                      setForm({ ...form, categoriaId: e.target.value, categoria: categoria?.nombre || '', subcategoria: '' });
+                    }}
+                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
+                  >
+                    <option value="">Categoría</option>
+                    {categoriasFiltradas.map(categoria => <option key={categoria.id} value={categoria.id}>{categoria.nombre}{categoria.esSugerida ? ' (tuya)' : ''}</option>)}
+                  </select>
+                  <select
+                    value={form.subcategoria}
+                    onChange={e => setForm({ ...form, subcategoria: e.target.value })}
+                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none"
+                  >
+                    <option value="">Subcategoría</option>
+                    {subcategorias.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+                    {form.subcategoria && !subcategorias.includes(form.subcategoria) && <option value={form.subcategoria}>{form.subcategoria}</option>}
+                  </select>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => guardar(gasto)} className="flex-1 p-3 rounded-2xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2"><Save size={18} /> Guardar</button>

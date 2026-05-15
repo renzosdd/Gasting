@@ -3,6 +3,7 @@ import { db } from '../firebase';
 import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { CarFront, CreditCard, FileText, Home, Mic, Plus, Sparkles, Wallet, X } from 'lucide-react';
 import { extractTextFromDocument } from '../utils/localOcr';
+import { getSubcategoriaNombre, normalizar, suggestionToExpensePayload } from '../utils/expenseUtils';
 
 const TIPOS_DESTINO = [
   { id: 'general', label: 'General', icon: Wallet },
@@ -10,12 +11,6 @@ const TIPOS_DESTINO = [
   { id: 'hogar', label: 'Casa', icon: Home },
   { id: 'tarjeta', label: 'Tarjeta', icon: CreditCard },
 ];
-
-const normalizar = (valor = '') => valor.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-const getSubcategoriaNombre = (subcategoria) => (
-  typeof subcategoria === 'string' ? subcategoria : subcategoria?.nombre || ''
-);
 
 const fileToBase64 = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -61,6 +56,7 @@ export default function ExpenseForm({ user }) {
   const [voiceStatus, setVoiceStatus] = useState('');
   const [documentStatus, setDocumentStatus] = useState('');
   const [documentSuggestions, setDocumentSuggestions] = useState([]);
+  const [selectedSuggestions, setSelectedSuggestions] = useState({});
   const [ocrText, setOcrText] = useState('');
   const [detalles, setDetalles] = useState({});
   const [loading, setLoading] = useState(false);
@@ -262,7 +258,12 @@ export default function ExpenseForm({ user }) {
         throw new Error(data.error || 'No se pudo analizar el documento.');
       }
 
-      setDocumentSuggestions(data.gastos || []);
+      const suggestions = (data.gastos || []).map((gasto, index) => ({
+        ...gasto,
+        id: `suggestion-${Date.now()}-${index}`,
+      }));
+      setDocumentSuggestions(suggestions);
+      setSelectedSuggestions(Object.fromEntries(suggestions.map(item => [item.id, Number(item.confianza || 0) >= 0.65])));
       setDocumentStatus(data.resumen || 'Documento analizado.');
     } catch (error) {
       console.error('Error al analizar documento:', error);
@@ -270,34 +271,31 @@ export default function ExpenseForm({ user }) {
     }
   };
 
-  const guardarSugerencia = async (sugerencia) => {
-    const categoria = categoriasDisponibles.find(cat => normalizar(cat.nombre) === normalizar(sugerencia.categoriaGrupo));
-    const categoriaNombre = categoria?.nombre || sugerencia.categoriaGrupo || 'Sin categoría';
+  const updateSuggestion = (id, patch) => {
+    setDocumentSuggestions((actual) => actual.map(item => item.id === id ? { ...item, ...patch } : item));
+  };
 
-    await addDoc(collection(db, 'gastos'), {
-      userId: user.uid,
-      monto: Number(sugerencia.monto || 0),
-      moneda: sugerencia.moneda || 'UYU',
-      tipoDestino: sugerencia.tipoDestino || 'general',
-      categoriaId: categoria?.id || null,
-      categoriaGrupo: categoriaNombre,
-      categoria: sugerencia.subcategoria || categoriaNombre,
-      subcategoria: sugerencia.subcategoria || null,
-      detalles: {
-        descripcion: sugerencia.descripcion || '',
-        notas: sugerencia.notas || '',
-        confianza: sugerencia.confianza || 0,
-        fuente: 'documento_ia',
-      },
-      estadoCuenta: {
-        nombre: estadoCuentaFile?.name || '',
-        estado: 'analizado_sin_storage',
-      },
-      origen: 'documento_ia',
-      fecha: serverTimestamp(),
+  const guardarSugerenciasSeleccionadas = async () => {
+    const seleccionadas = documentSuggestions.filter(item => selectedSuggestions[item.id]);
+    if (seleccionadas.length === 0) return;
+
+    const batch = writeBatch(db);
+    seleccionadas.forEach((sugerencia) => {
+      const gastoRef = doc(collection(db, 'gastos'));
+      batch.set(gastoRef, {
+        ...suggestionToExpensePayload({
+          sugerencia,
+          userId: user.uid,
+          categorias: categoriasDisponibles,
+          sourceFileName: estadoCuentaFile?.name || '',
+        }),
+        fecha: serverTimestamp(),
+      });
     });
 
-    setDocumentSuggestions((actual) => actual.filter(item => item !== sugerencia));
+    await batch.commit();
+    setDocumentSuggestions((actual) => actual.filter(item => !selectedSuggestions[item.id]));
+    setSelectedSuggestions({});
   };
 
   const handleSubmit = async (e) => {
@@ -561,26 +559,86 @@ export default function ExpenseForm({ user }) {
 
           {documentSuggestions.length > 0 && (
             <div className="space-y-3 bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
-              <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Sugerencias del documento</p>
-              {documentSuggestions.map((sugerencia, index) => (
-                <div key={`${sugerencia.descripcion}-${index}`} className="p-3 bg-white rounded-xl border border-zinc-100">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-bold text-zinc-800">{sugerencia.descripcion}</p>
-                      <p className="text-xs text-zinc-500">{sugerencia.categoriaGrupo} · {sugerencia.subcategoria} · {sugerencia.tipoDestino}</p>
-                      {sugerencia.notas && <p className="text-xs text-zinc-400 mt-1">{sugerencia.notas}</p>}
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Revisar sugerencias</p>
+                <button type="button" onClick={guardarSugerenciasSeleccionadas} className="px-3 py-2 rounded-xl bg-emerald-500 text-white text-xs font-bold">
+                  Guardar seleccionados
+                </button>
+              </div>
+              {documentSuggestions.map((sugerencia) => {
+                const categoriaActual = categoriasDisponibles.find(cat => normalizar(cat.nombre) === normalizar(sugerencia.categoriaGrupo));
+                const categoriasParaTipo = categoriasDisponibles.filter(cat => (cat.tipoDestino || 'general') === (sugerencia.tipoDestino || 'general'));
+                const subcategoriasSugerencia = categoriaActual?.subcategorias || [];
+
+                return (
+                  <div key={sugerencia.id} className={`p-3 bg-white rounded-xl border ${selectedSuggestions[sugerencia.id] ? 'border-emerald-200' : 'border-zinc-100 opacity-70'}`}>
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedSuggestions[sugerencia.id])}
+                        onChange={(e) => setSelectedSuggestions((actual) => ({ ...actual, [sugerencia.id]: e.target.checked }))}
+                        className="mt-1 w-5 h-5 accent-emerald-500"
+                      />
+                      <div className="flex-1 space-y-2">
+                        <input
+                          value={sugerencia.descripcion || ''}
+                          onChange={(e) => updateSuggestion(sugerencia.id, { descripcion: e.target.value })}
+                          className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none font-bold text-zinc-800"
+                          placeholder="Descripción"
+                        />
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number"
+                            value={sugerencia.monto || ''}
+                            onChange={(e) => updateSuggestion(sugerencia.id, { monto: Number(e.target.value) })}
+                            className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none font-bold"
+                          />
+                          <select
+                            value={sugerencia.moneda || 'UYU'}
+                            onChange={(e) => updateSuggestion(sugerencia.id, { moneda: e.target.value })}
+                            className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none font-bold"
+                          >
+                            <option value="UYU">Pesos</option>
+                            <option value="USD">Dólares</option>
+                          </select>
+                        </div>
+                        <select
+                          value={sugerencia.tipoDestino || 'general'}
+                          onChange={(e) => updateSuggestion(sugerencia.id, { tipoDestino: e.target.value, categoriaGrupo: '', subcategoria: '' })}
+                          className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none"
+                        >
+                          {TIPOS_DESTINO.map(tipo => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
+                        </select>
+                        <div className="grid grid-cols-2 gap-2">
+                          <select
+                            value={categoriaActual?.nombre || ''}
+                            onChange={(e) => updateSuggestion(sugerencia.id, { categoriaGrupo: e.target.value, subcategoria: '' })}
+                            className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none"
+                          >
+                            <option value="">Categoría</option>
+                            {categoriasParaTipo.map(cat => <option key={cat.id} value={cat.nombre}>{cat.nombre}</option>)}
+                          </select>
+                          <select
+                            value={sugerencia.subcategoria || ''}
+                            onChange={(e) => updateSuggestion(sugerencia.id, { subcategoria: e.target.value })}
+                            className="w-full p-2 bg-zinc-50 border border-zinc-100 rounded-xl outline-none"
+                          >
+                            <option value="">Subcategoría</option>
+                            {subcategoriasSugerencia.map(sub => {
+                              const nombre = getSubcategoriaNombre(sub);
+                              return <option key={nombre} value={nombre}>{nombre}</option>;
+                            })}
+                            {sugerencia.subcategoria && !subcategoriasSugerencia.some(sub => getSubcategoriaNombre(sub) === sugerencia.subcategoria) && (
+                              <option value={sugerencia.subcategoria}>{sugerencia.subcategoria}</option>
+                            )}
+                          </select>
+                        </div>
+                        {sugerencia.notas && <p className="text-xs text-zinc-400">{sugerencia.notas}</p>}
+                      </div>
                     </div>
-                    <p className="font-black text-zinc-900 whitespace-nowrap">{sugerencia.moneda === 'USD' ? 'US$' : '$'}{Number(sugerencia.monto || 0).toFixed(2)}</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => guardarSugerencia(sugerencia)}
-                    className="mt-3 w-full p-3 rounded-xl bg-emerald-500 text-white font-bold"
-                  >
-                    Guardar este gasto
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
