@@ -2,21 +2,23 @@ import { useState, useEffect } from 'react';
 import { auth, db, loginConGoogle, logout } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { History, LogOut, Plus, BarChart3, Settings, User } from 'lucide-react';
+import { History, LogOut, Plus, BarChart3, Settings, User, X } from 'lucide-react';
 import ExpenseForm from './components/ExpenseForm';
 import Dashboard from './components/Dashboard';
 import AdminPanel from './components/AdminPanel';
 import EntitiesManager from './components/EntitiesManager';
 import ExpenseHistory from './components/ExpenseHistory';
 import LandingPage from './components/LandingPage';
+import Home from './components/Home';
 
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'renzodogliotti@gmail.com';
 
 function App() {
   const [user, setUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [vistaActiva, setVistaActiva] = useState('form');
+  const [vistaActiva, setVistaActiva] = useState('home');
   const [loginError, setLoginError] = useState('');
+  const [expenseModal, setExpenseModal] = useState(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -89,23 +91,55 @@ function App() {
 
       {/* Contenido Principal */}
       <main className="flex-1 overflow-y-auto px-6 pb-32">
-        {vistaActiva === 'form' && <ExpenseForm user={user} />}
+        {vistaActiva === 'home' && (
+          <Home
+            user={user}
+            onAddExpense={(mode) => setExpenseModal(mode)}
+            onOpenReports={() => setVistaActiva('dashboard')}
+          />
+        )}
         {vistaActiva === 'dashboard' && <Dashboard user={user} />}
         {vistaActiva === 'history' && <ExpenseHistory user={user} />}
         {vistaActiva === 'profile' && <EntitiesManager user={user} />}
         {vistaActiva === 'admin' && isAdmin && <AdminPanel />}
       </main>
 
+      {expenseModal && (
+        <div className="fixed inset-0 z-40 bg-black/40 flex items-end justify-center px-3 pb-3">
+          <div className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-[2rem] bg-zinc-50 p-4 shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
+            <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-2 bg-zinc-50/90 backdrop-blur-md px-4 pt-4 pb-2 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-emerald-600">Nuevo gasto</p>
+                <h2 className="text-xl font-black text-zinc-900">
+                  {expenseModal === 'voice' ? 'Cargar por voz' : expenseModal === 'document' ? 'Cargar con IA' : 'Cargar manual'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpenseModal(null)}
+                className="w-10 h-10 rounded-full bg-white border border-zinc-100 text-zinc-500 flex items-center justify-center"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <ExpenseForm
+              user={user}
+              initialAction={expenseModal}
+              onSaved={() => setExpenseModal(null)}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Navegación Inferior Flotante */}
       <div className="fixed bottom-6 left-0 right-0 px-6 max-w-md mx-auto pointer-events-none">
         <nav className="bg-zinc-900/90 backdrop-blur-lg border border-zinc-800 rounded-full flex justify-between items-center p-2 shadow-2xl pointer-events-auto">
           
-          {/* Botón: Nuevo Gasto */}
           <button 
-            onClick={() => setVistaActiva('form')}
-            className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'form' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
+            onClick={() => setVistaActiva('home')}
+            className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'home' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
           >
-            <Plus size={24} strokeWidth={vistaActiva === 'form' ? 2.5 : 2} />
+            <History size={24} strokeWidth={vistaActiva === 'home' ? 2.5 : 2} />
           </button>
           
           <div className="w-px h-8 bg-zinc-700"></div>
@@ -116,6 +150,15 @@ function App() {
             className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'dashboard' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
           >
             <BarChart3 size={24} strokeWidth={vistaActiva === 'dashboard' ? 2.5 : 2} />
+          </button>
+
+          <div className="w-px h-8 bg-zinc-700"></div>
+
+          <button 
+            onClick={() => setExpenseModal('manual')}
+            className="flex-1 flex justify-center py-3 rounded-full transition-all text-zinc-400 hover:text-white"
+          >
+            <Plus size={24} />
           </button>
 
           <div className="w-px h-8 bg-zinc-700"></div>

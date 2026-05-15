@@ -1,4 +1,4 @@
-import { BarChart3, CarFront, CheckCircle2, CreditCard, Home, Mic, ReceiptText, Sparkles, TrendingDown, Wallet } from 'lucide-react';
+import { BarChart3, CarFront, CheckCircle2, CreditCard, Home, Mic, ReceiptText, ShieldCheck, Sparkles, TrendingDown, Wallet } from 'lucide-react';
 
 const benefits = [
   {
@@ -190,6 +190,20 @@ export default function LandingPage({ onLogin, loginError }) {
                   <p className="mt-2 text-sm leading-6 text-zinc-500">{text}</p>
                 </div>
               ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="max-w-6xl mx-auto px-5 pb-14 md:pb-20">
+          <div className="rounded-[2rem] bg-zinc-50 border border-zinc-200 p-6 md:p-8 grid md:grid-cols-[0.75fr_1fr] gap-6 items-center">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+              <ShieldCheck size={28} />
+            </div>
+            <div>
+              <h2 className="text-2xl md:text-4xl font-black tracking-tight text-zinc-900">Tus datos se revisan antes de guardarse.</h2>
+              <p className="mt-3 text-zinc-600 leading-7">
+                Cuando usás voz o documentos, Gasting prepara sugerencias editables. Vos confirmás qué se guarda, corregís categorías y descartás lo que no corresponde.
+              </p>
             </div>
           </div>
         </section>

@@ -58,7 +58,7 @@ export default function Home({ user, onAddExpense, onOpenReports }) {
 
   const porCategoria = useMemo(() => {
     const grupos = new Map();
-    gastosMes.forEach((gasto) => {
+    gastosMes.filter(gasto => (gasto.moneda || 'UYU') === 'UYU').forEach((gasto) => {
       const key = gasto.categoriaGrupo || gasto.categoria || 'Sin categoría';
       grupos.set(key, (grupos.get(key) || 0) + Number(gasto.monto || 0));
     });

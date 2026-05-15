@@ -39,7 +39,7 @@ const campoExtra = (subcategoria, tipoDestino) => {
   return [];
 };
 
-export default function ExpenseForm({ user }) {
+export default function ExpenseForm({ user, initialAction = 'manual', onSaved }) {
   const [monto, setMonto] = useState('');
   const [moneda, setMoneda] = useState('UYU');
   const [tipoDestino, setTipoDestino] = useState('general');
@@ -204,6 +204,41 @@ export default function ExpenseForm({ user }) {
     };
   };
 
+  const analizarTextoVoz = async (texto) => {
+    const response = await fetch('/.netlify/functions/analyze-document', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceType: 'voice',
+        fileName: 'audio_transcripto',
+        mimeType: 'text/plain',
+        extractedText: texto,
+        categorias: categoriasDisponibles.map(categoria => ({
+          nombre: categoria.nombre,
+          tipoDestino: categoria.tipoDestino || 'general',
+          subcategorias: (categoria.subcategorias || []).map(getSubcategoriaNombre),
+        })),
+        tarjetas: tarjetas.map(tarjeta => ({
+          nombre: tarjeta.nombre,
+          banco: tarjeta.banco,
+          marca: tarjeta.marca,
+          ultimos4: tarjeta.ultimos4,
+        })),
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'No se pudo interpretar el audio.');
+    }
+
+    return (data.gastos || []).map((gasto, index) => ({
+      ...gasto,
+      id: `voice-${Date.now()}-${index}`,
+      source: 'voz',
+    }));
+  };
+
   const iniciarVoz = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -215,6 +250,7 @@ export default function ExpenseForm({ user }) {
     recognition.lang = 'es-UY';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
+    let receivedResult = false;
     recognition.onstart = () => {
       setReviewMode('voz');
       setReviewOpen(true);
@@ -229,18 +265,32 @@ export default function ExpenseForm({ user }) {
       setProcessingLabel('');
       setVoiceStatus('No pude escuchar bien. Probá de nuevo.');
     };
-    recognition.onresult = (event) => {
+    recognition.onresult = async (event) => {
+      receivedResult = true;
       const texto = event.results[0][0].transcript;
-      const suggestion = buildVoiceSuggestion(texto);
-      setDocumentSuggestions([suggestion]);
-      setSelectedSuggestions({ [suggestion.id]: true });
-      setProcessingReview(false);
-      setProcessingLabel('');
-      setVoiceStatus('');
+      setProcessingLabel('Ordenando tus gastos...');
+      try {
+        const suggestions = await analizarTextoVoz(texto);
+        const finalSuggestions = suggestions.length > 0 ? suggestions : [buildVoiceSuggestion(texto)];
+        setDocumentSuggestions(finalSuggestions);
+        setSelectedSuggestions(Object.fromEntries(finalSuggestions.map(item => [item.id, true])));
+        setVoiceStatus('');
+      } catch (error) {
+        console.error('Error al interpretar voz con IA:', error);
+        const fallback = buildVoiceSuggestion(texto);
+        setDocumentSuggestions([fallback]);
+        setSelectedSuggestions({ [fallback.id]: true });
+        setVoiceStatus('No pude usar IA para la voz, te dejé una sugerencia básica.');
+      } finally {
+        setProcessingReview(false);
+        setProcessingLabel('');
+      }
     };
     recognition.onend = () => {
-      setProcessingReview(false);
-      setProcessingLabel('');
+      if (!receivedResult) {
+        setProcessingReview(false);
+        setProcessingLabel('');
+      }
       setTimeout(() => setVoiceStatus(''), 5000);
     };
     recognition.start();
@@ -277,6 +327,7 @@ export default function ExpenseForm({ user }) {
         body: JSON.stringify({
           fileName: estadoCuentaFile.name,
           mimeType: estadoCuentaFile.type || 'application/octet-stream',
+          sourceType: 'document',
           extractedText,
           fileData,
           categorias: categoriasDisponibles.map(categoria => ({
@@ -346,6 +397,7 @@ export default function ExpenseForm({ user }) {
       setReviewOpen(false);
       setEstadoCuentaFile(null);
       setOcrText('');
+      onSaved?.();
     }
   };
 
@@ -405,7 +457,8 @@ export default function ExpenseForm({ user }) {
       setSubcategoriaSugerida('');
       setCategoriaSugerida('');
       setDetalles({});
-      alert('¡Gasto guardado con éxito!');
+      onSaved?.();
+      if (!onSaved) alert('¡Gasto guardado con éxito!');
     } catch (error) {
       console.error("Detalle del error:", error);
       alert('Error al guardar. Revisá la consola para más detalles: ' + error.message);
@@ -417,6 +470,13 @@ export default function ExpenseForm({ user }) {
     <div className="pt-4 animate-in fade-in duration-500">
       <form onSubmit={handleSubmit} className="flex flex-col h-full">
         <div className="flex flex-col items-center justify-center py-8">
+          {initialAction !== 'manual' && (
+            <div className="mb-5 w-full rounded-3xl bg-white border border-zinc-100 p-4 text-center shadow-sm">
+              <p className="text-sm font-bold text-zinc-800">
+                {initialAction === 'voice' ? 'Dictá uno o varios gastos y los preparamos para revisar.' : 'Subí un ticket, boleta o resumen y revisá las sugerencias.'}
+              </p>
+            </div>
+          )}
           <span className="text-zinc-400 font-medium mb-2">¿Cuánto gastaste?</span>
           <div className="flex items-center justify-center text-emerald-500">
             <span className="text-4xl font-bold mr-1">{moneda === 'USD' ? 'US$' : '$'}</span>
@@ -445,11 +505,11 @@ export default function ExpenseForm({ user }) {
           <button
             type="button"
             onClick={iniciarVoz}
-            className="mt-5 px-4 py-3 rounded-full bg-zinc-900 text-white font-bold text-sm flex items-center gap-2 active:scale-95 transition-all"
+            className={`mt-5 px-4 py-3 rounded-full font-bold text-sm flex items-center gap-2 active:scale-95 transition-all ${initialAction === 'voice' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-zinc-900 text-white'}`}
           >
             <Mic size={18} /> Agregar por voz
           </button>
-          <label className="mt-3 px-4 py-3 rounded-full bg-white border border-zinc-200 text-zinc-800 font-bold text-sm flex items-center gap-2 active:scale-95 transition-all shadow-sm cursor-pointer">
+          <label className={`mt-3 px-4 py-3 rounded-full bg-white border font-bold text-sm flex items-center gap-2 active:scale-95 transition-all shadow-sm cursor-pointer ${initialAction === 'document' ? 'border-indigo-200 text-indigo-700' : 'border-zinc-200 text-zinc-800'}`}>
             <FileText size={18} /> Analizar documento
             <input
               type="file"
