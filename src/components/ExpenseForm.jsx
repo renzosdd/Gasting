@@ -73,6 +73,12 @@ const campoExtra = (subcategoria, tipoDestino) => {
   return [];
 };
 
+const inputDateFromOffset = (offsetDays = 0) => {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
 export default function ExpenseForm({ user, initialAction = 'manual', onSaved }) {
   const fileInputRef = useRef(null);
   const autoStartedRef = useRef(false);
@@ -300,8 +306,92 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     }
   };
 
+  const fechaDesdeTextoVoz = (texto) => {
+    const limpio = normalizar(texto);
+    if (limpio.includes('anteayer')) return inputDateFromOffset(-2);
+    if (limpio.includes('ayer')) return inputDateFromOffset(-1);
+    return todayInputValue();
+  };
+
+  const detectarCategoriaVoz = (texto) => {
+    const limpio = normalizar(texto);
+    const buscar = (categoriaNombre, subcategoriaNombre, tipoDestinoDefault = 'general') => {
+      const categoria = encontrarCategoria(categoriaNombre, tipoDestinoDefault);
+      return {
+        tipoDestino: categoria?.tipoDestino || tipoDestinoDefault,
+        categoriaGrupo: categoria?.nombre || categoriaNombre,
+        subcategoria: subcategoriaNombre,
+      };
+    };
+
+    if (/(nafta|combustible|ancap|axion|shell|petrobras)/.test(limpio)) return buscar('Vehículo', 'Combustible', 'vehiculo');
+    if (/(service|taller|mecanico|mecanico|reparacion auto|cubierta|neumatico)/.test(limpio)) return buscar('Vehículo', 'Service', 'vehiculo');
+    if (/(ute|luz|energia electrica)/.test(limpio)) return buscar('Casa', 'UTE', 'hogar');
+    if (/(ose|agua)/.test(limpio)) return buscar('Casa', 'OSE', 'hogar');
+    if (/(antel|internet|wifi|fibra)/.test(limpio)) return buscar('Casa', 'Internet', 'hogar');
+    if (/(alquiler|gastos comunes)/.test(limpio)) return buscar('Casa', limpio.includes('gastos comunes') ? 'Gastos comunes' : 'Alquiler', 'hogar');
+    if (/(tarjeta|visa|master|mastercard|oca)/.test(limpio)) return buscar('Tarjeta de crédito', 'Pago de tarjeta', 'tarjeta');
+    if (/(super|supermercado|devoto|disco|tata|tienda inglesa|macro|gean|geánt|almacen|almacen)/.test(limpio)) return buscar('Alimentación', 'Supermercado', 'general');
+    if (/(restaurant|restaurante|bar|cafe|café)/.test(limpio)) return buscar('Alimentación', 'Restaurante', 'general');
+    if (/(delivery|pedido ya|pedidos ya|rappi)/.test(limpio)) return buscar('Alimentación', 'Delivery', 'general');
+    if (/(farmacia|medicamento)/.test(limpio)) return buscar('Salud', 'Farmacia', 'general');
+    if (/(colegio|escuela|liceo|curso|clase)/.test(limpio)) return buscar('Educación', 'Cuotas', 'general');
+    if (/(ropa|calzado|zapato)/.test(limpio)) return buscar('Ropa y cuidado', limpio.includes('calzado') || limpio.includes('zapato') ? 'Calzado' : 'Ropa', 'general');
+    if (/(mascota|veterinaria|perro|gato|alimento de mascota)/.test(limpio)) return buscar('Mascotas', limpio.includes('veterinaria') ? 'Veterinaria' : 'Alimento', 'general');
+
+    const categoriaDetectada = categoriasDisponibles.find(categoria => limpio.includes(normalizar(categoria.nombre)));
+    const subDetectada = categoriasDisponibles.flatMap(categoria => categoria.subcategorias || []).find(sub => {
+      const nombre = getSubcategoriaNombre(sub);
+      return nombre && limpio.includes(normalizar(nombre));
+    });
+
+    return {
+      tipoDestino: categoriaDetectada?.tipoDestino || 'general',
+      categoriaGrupo: categoriaDetectada?.nombre || '',
+      subcategoria: subDetectada ? getSubcategoriaNombre(subDetectada) : '',
+    };
+  };
+
+  const buildVoiceSuggestions = (texto) => {
+    const limpio = normalizar(texto);
+    const fechaDetectada = fechaDesdeTextoVoz(texto);
+    const monedaGlobal = limpio.includes('dolar') || limpio.includes('dolares') || limpio.includes('usd') ? 'USD' : 'UYU';
+    const matches = [...texto.matchAll(/(?:us\$|usd|\$)?\s*(\d+(?:[.,]\d+)?)(?:\s*(?:pesos|peso|dolares|dólares|usd))?(?:\s+(?:en|de|para|por)\s+)?([^,.;]+?)(?=(?:\s+(?:y|e|tambien|también|ademas|además)\s+(?:us\$|usd|\$)?\s*\d)|[,.;]|$)/gi)]
+      .map((match) => ({
+        monto: Number(String(match[1]).replace(',', '.')),
+        descripcion: String(match[2] || texto)
+          .replace(/\b(gaste|gasté|pague|pagué|compre|compré|ayer|hoy|anteayer)\b/gi, '')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      }))
+      .filter(item => item.monto > 0);
+
+    const items = matches.length > 0 ? matches : [{
+      monto: Number((limpio.match(/(\d+(?:[.,]\d+)?)/)?.[1] || '').replace(',', '.')) || '',
+      descripcion: texto,
+    }];
+
+    return items.map((item, index) => {
+      const categoria = detectarCategoriaVoz(item.descripcion || texto);
+      return {
+        id: `voice-local-${Date.now()}-${index}`,
+        descripcion: item.descripcion || texto,
+        monto: item.monto,
+        moneda: monedaGlobal,
+        tipoDestino: categoria.tipoDestino,
+        categoriaGrupo: categoria.categoriaGrupo,
+        subcategoria: categoria.subcategoria,
+        fecha: fechaDetectada,
+        confianza: item.monto ? (matches.length > 1 ? 0.82 : 0.74) : 0.5,
+        notas: matches.length > 1 ? 'Separado automáticamente desde la frase de voz.' : 'Revisá la categoría y el monto antes de guardar.',
+        source: 'voz',
+      };
+    });
+  };
+
   const buildVoiceSuggestion = (texto) => {
     const limpio = normalizar(texto);
+    const fallback = buildVoiceSuggestions(texto)[0] || {};
     const montoMatch = limpio.match(/(\d+(?:[.,]\d+)?)/);
     const monedaDetectada = limpio.includes('dolar') || limpio.includes('dolares') || limpio.includes('usd') ? 'USD' : 'UYU';
     let tipoDetectado = 'general';
@@ -317,6 +407,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     });
 
     return {
+      ...fallback,
       id: `voice-${Date.now()}`,
       descripcion: texto,
       monto: montoMatch ? Number(montoMatch[1].replace(',', '.')) : '',
@@ -324,7 +415,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
       tipoDestino: categoriaDetectada?.tipoDestino || tipoDetectado,
       categoriaGrupo: categoriaDetectada?.nombre || '',
       subcategoria: subDetectada ? getSubcategoriaNombre(subDetectada) : '',
-      fecha: todayInputValue(),
+      fecha: fechaDesdeTextoVoz(texto),
       confianza: montoMatch ? 0.78 : 0.55,
       notas: 'Revisá la categoría y el monto antes de guardar.',
       source: 'voz',
@@ -398,15 +489,17 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
       setProcessingLabel('Ordenando tus gastos...');
       try {
         const suggestions = await analizarTextoVoz(texto);
-        const finalSuggestions = marcarDuplicados(aplicarReglasLocales(suggestions.length > 0 ? suggestions : [buildVoiceSuggestion(texto)]));
+        const localSuggestions = buildVoiceSuggestions(texto);
+        const baseSuggestions = localSuggestions.length > suggestions.length ? localSuggestions : suggestions.length > 0 ? suggestions : [buildVoiceSuggestion(texto)];
+        const finalSuggestions = marcarDuplicados(aplicarReglasLocales(baseSuggestions));
         setDocumentSuggestions(finalSuggestions);
         setSelectedSuggestions(Object.fromEntries(finalSuggestions.map(item => [item.id, !item.posibleDuplicado])));
         setVoiceStatus('');
       } catch (error) {
         console.error('Error al interpretar voz con IA:', error);
-        const fallback = marcarDuplicados(aplicarReglasLocales([buildVoiceSuggestion(texto)]))[0];
-        setDocumentSuggestions([fallback]);
-        setSelectedSuggestions({ [fallback.id]: !fallback.posibleDuplicado });
+        const fallback = marcarDuplicados(aplicarReglasLocales(buildVoiceSuggestions(texto)));
+        setDocumentSuggestions(fallback);
+        setSelectedSuggestions(Object.fromEntries(fallback.map(item => [item.id, !item.posibleDuplicado])));
         setVoiceStatus('No pude usar IA para la voz, te dejé una sugerencia básica.');
       } finally {
         setProcessingReview(false);
@@ -629,7 +722,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
       setReviewOpen(false);
       setEstadoCuentaFile(null);
       setOcrText('');
-      onSaved?.();
+      onSaved?.({ reviewPending: true, sourceType, savedCount: seleccionadas.length });
     }
   };
 

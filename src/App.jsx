@@ -18,6 +18,7 @@ function App() {
   const [vistaActiva, setVistaActiva] = useState('home');
   const [loginError, setLoginError] = useState('');
   const [expenseModal, setExpenseModal] = useState(null);
+  const [homePendingSignal, setHomePendingSignal] = useState(0);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -94,6 +95,7 @@ function App() {
           <Home
             user={user}
             onAddExpense={(mode) => setExpenseModal(mode)}
+            focusPendingSignal={homePendingSignal}
           />
         )}
         {vistaActiva === 'profile' && <EntitiesManager user={user} />}
@@ -122,7 +124,13 @@ function App() {
             <ExpenseForm
               user={user}
               initialAction={expenseModal}
-              onSaved={() => setExpenseModal(null)}
+              onSaved={(result) => {
+                setExpenseModal(null);
+                if (result?.reviewPending) {
+                  setVistaActiva('home');
+                  setHomePendingSignal((actual) => actual + 1);
+                }
+              }}
             />
           </div>
         </div>

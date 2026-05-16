@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, Timestamp, updateDoc, where } from 'firebase/firestore';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, CheckSquare, Edit3, FileText, Filter, Mic, Plus, Save, Search, Sparkles, Square, Trash2, TrendingUp, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, CheckSquare, Edit3, FileText, Filter, MessageCircle, Mic, Plus, Save, Search, Sparkles, Square, Trash2, TrendingUp, X } from 'lucide-react';
 import { db } from '../firebase';
 import { dateInputToDate, dateToInputValue, getCategoriasFiltradas, getSubcategorias, normalizar, TIPOS_DESTINO } from '../utils/expenseUtils';
 
@@ -23,6 +23,11 @@ const currentWeek = () => {
   return `${now.getFullYear()}-W${String(Math.ceil((days + first.getDay() + 1) / 7)).padStart(2, '0')}`;
 };
 
+const currentDay = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
 const expenseMonth = (gasto) => {
   const date = gasto.fecha?.toDate?.() || (gasto.fecha instanceof Date ? gasto.fecha : null);
   if (!date) return '';
@@ -35,6 +40,12 @@ const expenseWeek = (gasto) => {
   const first = new Date(date.getFullYear(), 0, 1);
   const days = Math.floor((date - first) / 86400000);
   return `${date.getFullYear()}-W${String(Math.ceil((days + first.getDay() + 1) / 7)).padStart(2, '0')}`;
+};
+
+const expenseDay = (gasto) => {
+  const date = gasto.fecha?.toDate?.() || (gasto.fecha instanceof Date ? gasto.fecha : null);
+  if (!date) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 
 const formatDate = (fecha) => {
@@ -50,7 +61,7 @@ const formatMoney = (gasto) => {
   return `${prefix}${Number(gasto.monto || 0).toLocaleString('es-UY', { maximumFractionDigits: 2 })}`;
 };
 
-export default function Home({ user, onAddExpense }) {
+export default function Home({ user, onAddExpense, focusPendingSignal = 0 }) {
   const [gastos, setGastos] = useState([]);
   const [presupuestos, setPresupuestos] = useState([]);
   const [vehiculos, setVehiculos] = useState([]);
@@ -70,6 +81,8 @@ export default function Home({ user, onAddExpense }) {
   const [showFilters, setShowFilters] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState({});
+  const [chatPregunta, setChatPregunta] = useState('');
+  const [chatRespuesta, setChatRespuesta] = useState('');
   const [filters, setFilters] = useState({
     periodo: 'mes',
     mes: currentMonth(),
@@ -81,6 +94,18 @@ export default function Home({ user, onAddExpense }) {
   });
   const mesActual = currentMonth();
   const semanaActual = currentWeek();
+  const diaActual = currentDay();
+
+  useEffect(() => {
+    if (!focusPendingSignal) return;
+    setFilters((actual) => ({
+      ...actual,
+      periodo: 'todos',
+      estadoRevision: 'pendiente_revision',
+      montoMin: '',
+      texto: '',
+    }));
+  }, [focusPendingSignal]);
 
   useEffect(() => {
     const q = query(collection(db, 'gastos'), where('userId', '==', user.uid));
@@ -146,7 +171,12 @@ export default function Home({ user, onAddExpense }) {
 
   const gastosPeriodo = useMemo(() => (
     gastos
-      .filter(gasto => filters.periodo === 'semana' ? expenseWeek(gasto) === semanaActual : expenseMonth(gasto) === filters.mes)
+      .filter((gasto) => {
+        if (filters.periodo === 'todos') return true;
+        if (filters.periodo === 'hoy') return expenseDay(gasto) === diaActual;
+        if (filters.periodo === 'semana') return expenseWeek(gasto) === semanaActual;
+        return expenseMonth(gasto) === filters.mes;
+      })
       .filter(gasto => filters.moneda === 'todas' || (gasto.moneda || 'UYU') === filters.moneda)
       .filter(gasto => filters.tipoDestino === 'todos' || (gasto.tipoDestino || 'general') === filters.tipoDestino)
       .filter(gasto => filters.estadoRevision === 'todos' || (gasto.estadoRevision || 'confirmado') === filters.estadoRevision)
@@ -157,7 +187,7 @@ export default function Home({ user, onAddExpense }) {
         return `${gasto.categoriaGrupo || ''} ${gasto.subcategoria || ''} ${gasto.categoria || ''} ${gasto.detalles?.descripcion || ''} ${gasto.detalles?.comentario || ''}`.toLowerCase().includes(texto);
       })
       .sort((a, b) => (b.fecha?.seconds || 0) - (a.fecha?.seconds || 0))
-  ), [filters, gastos, semanaActual]);
+  ), [diaActual, filters, gastos, semanaActual]);
 
   const gastosMes = useMemo(() => (
     gastos.filter(gasto => expenseMonth(gasto) === mesActual)
@@ -188,6 +218,36 @@ export default function Home({ user, onAddExpense }) {
   ), [gastosMesAnterior]);
 
   const variacionMes = totalMesAnteriorUyu > 0 ? ((totalUyu - totalMesAnteriorUyu) / totalMesAnteriorUyu) * 100 : 0;
+
+  const totalMesUyu = useMemo(() => (
+    gastosMes
+      .filter(gasto => (gasto.moneda || 'UYU') === 'UYU')
+      .reduce((total, gasto) => total + Number(gasto.monto || 0), 0)
+  ), [gastosMes]);
+
+  const resumenMes = useMemo(() => {
+    const ahora = new Date();
+    const dia = ahora.getDate();
+    const diasMes = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0).getDate();
+    const diasRestantes = Math.max(0, diasMes - dia);
+    const presupuestoMensual = presupuestos
+      .filter(presupuesto => (presupuesto.periodo || 'mensual') === 'mensual')
+      .filter(presupuesto => (presupuesto.moneda || 'UYU') === 'UYU')
+      .reduce((total, presupuesto) => total + Number(presupuesto.monto || 0), 0);
+    const pctPresupuesto = presupuestoMensual > 0 ? (totalMesUyu / presupuestoMensual) * 100 : null;
+    const promedioActual = totalMesUyu / Math.max(dia, 1);
+    const promedioRecomendado = presupuestoMensual > 0 ? presupuestoMensual / diasMes : null;
+
+    return {
+      dia,
+      diasMes,
+      diasRestantes,
+      presupuestoMensual,
+      pctPresupuesto,
+      promedioActual,
+      promedioRecomendado,
+    };
+  }, [presupuestos, totalMesUyu]);
 
   const pendientesRevision = useMemo(() => (
     gastosMes.filter(gasto => gasto.estadoRevision === 'pendiente_revision').length
@@ -423,6 +483,58 @@ export default function Home({ user, onAddExpense }) {
     gastosPeriodo.filter(gasto => selectedIds[gasto.id])
   ), [gastosPeriodo, selectedIds]);
 
+  const responderChat = (pregunta) => {
+    const texto = normalizar(pregunta);
+    const base = texto.includes('semana') ? gastosPeriodo : gastosMes;
+    const gastosUyu = base.filter(gasto => (gasto.moneda || 'UYU') === 'UYU');
+    const total = gastosUyu.reduce((sum, gasto) => sum + Number(gasto.monto || 0), 0);
+    const topCategoria = () => {
+      const grupos = new Map();
+      gastosUyu.forEach((gasto) => {
+        const key = gasto.categoriaGrupo || gasto.categoria || 'Sin categoría';
+        grupos.set(key, (grupos.get(key) || 0) + Number(gasto.monto || 0));
+      });
+      return [...grupos.entries()].sort((a, b) => b[1] - a[1])[0];
+    };
+
+    if (gastosUyu.length === 0) return 'Todavía no tengo gastos en pesos para responder esa pregunta.';
+
+    if (texto.includes('mas') || texto.includes('categoria') || texto.includes('donde')) {
+      const top = topCategoria();
+      if (!top) return 'No encontré una categoría clara todavía.';
+      const pct = total > 0 ? (top[1] / total) * 100 : 0;
+      return `Lo más fuerte viene por ${top[0]}: $${top[1].toLocaleString('es-UY', { maximumFractionDigits: 0 })}, aprox. ${pct.toFixed(0)}% del total analizado.`;
+    }
+
+    if (texto.includes('presupuesto') || texto.includes('ritmo')) {
+      if (!resumenMes.presupuestoMensual) return 'Todavía no tenés presupuesto mensual en pesos. Cuando lo cargues puedo comparar ritmo real contra recomendado.';
+      const diferencia = resumenMes.promedioActual - resumenMes.promedioRecomendado;
+      return `Vas gastando $${resumenMes.promedioActual.toLocaleString('es-UY', { maximumFractionDigits: 0 })} por día. Recomendado: $${resumenMes.promedioRecomendado.toLocaleString('es-UY', { maximumFractionDigits: 0 })}. ${diferencia > 0 ? `Estás $${diferencia.toLocaleString('es-UY', { maximumFractionDigits: 0 })} por día arriba.` : `Estás $${Math.abs(diferencia).toLocaleString('es-UY', { maximumFractionDigits: 0 })} por día abajo.`}`;
+    }
+
+    if (texto.includes('pendiente') || texto.includes('revisar')) {
+      const pendientes = gastos.filter(gasto => gasto.estadoRevision === 'pendiente_revision').length;
+      return pendientes > 0 ? `Tenés ${pendientes} gasto${pendientes === 1 ? '' : 's'} pendiente${pendientes === 1 ? '' : 's'} de revisar. Te conviene cerrar eso antes de mirar reportes finos.` : 'No tenés pendientes de revisar. Bien, los reportes deberían estar bastante limpios.';
+    }
+
+    if (texto.includes('tarjeta')) {
+      const totalTarjeta = gastosMes
+        .filter(gasto => gasto.tipoDestino === 'tarjeta' || gasto.tarjetaId)
+        .filter(gasto => (gasto.moneda || 'UYU') === 'UYU')
+        .reduce((sum, gasto) => sum + Number(gasto.monto || 0), 0);
+      return totalTarjeta > 0 ? `En tarjetas tenés $${totalTarjeta.toLocaleString('es-UY', { maximumFractionDigits: 0 })} cargados este mes.` : 'No veo gastos de tarjeta cargados este mes.';
+    }
+
+    return `Este mes llevás $${totalMesUyu.toLocaleString('es-UY', { maximumFractionDigits: 0 })} en pesos. ${resumenMes.pctPresupuesto !== null ? `Eso es ${resumenMes.pctPresupuesto.toFixed(0)}% de tus presupuestos mensuales.` : 'Si cargás presupuestos, te puedo decir si vas bien de ritmo.'}`;
+  };
+
+  const preguntarChat = (pregunta) => {
+    const texto = pregunta.trim();
+    if (!texto) return;
+    setChatPregunta(texto);
+    setChatRespuesta(responderChat(texto));
+  };
+
   const confirmarGasto = async (gastoId) => {
     await updateDoc(doc(db, 'gastos', gastoId), { estadoRevision: 'confirmado' });
   };
@@ -585,11 +697,19 @@ export default function Home({ user, onAddExpense }) {
     });
   };
 
+  const periodoLabel = filters.periodo === 'hoy'
+    ? 'hoy'
+      : filters.periodo === 'semana'
+        ? 'esta semana'
+      : filters.periodo === 'todos'
+        ? filters.estadoRevision === 'pendiente_revision' ? 'pendiente de revisar' : 'total'
+        : 'este mes';
+
   return (
     <div className="pt-4 animate-in fade-in duration-500 space-y-5">
       <section className="rounded-[2rem] bg-zinc-900 text-white p-5 shadow-xl shadow-zinc-900/10">
         <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Gastado {filters.periodo === 'semana' ? 'esta semana' : 'este mes'}</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Gastado {periodoLabel}</p>
             <p className="mt-2 text-4xl font-black tracking-tight">
               ${totalUyu.toLocaleString('es-UY', { maximumFractionDigits: 0 })}
             </p>
@@ -599,6 +719,23 @@ export default function Home({ user, onAddExpense }) {
               </p>
             )}
             <p className="mt-3 text-sm font-bold text-zinc-300">Agregar nuevo gasto</p>
+        </div>
+
+        <div className="mt-5 grid grid-cols-3 gap-2 rounded-2xl bg-white/10 p-1">
+          {[
+            { id: 'hoy', label: 'Hoy' },
+            { id: 'semana', label: 'Semana' },
+            { id: 'mes', label: 'Mes' },
+          ].map(item => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setFilters((actual) => ({ ...actual, periodo: item.id, estadoRevision: 'todos', montoMin: '' }))}
+              className={`py-2 rounded-xl text-xs font-black transition-all ${filters.periodo === item.id ? 'bg-white text-zinc-900' : 'text-zinc-300'}`}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-2">
@@ -614,6 +751,37 @@ export default function Home({ user, onAddExpense }) {
             <Sparkles size={19} />
             <span className="text-[11px]">IA</span>
           </button>
+        </div>
+      </section>
+
+      <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
+            <p className="text-[11px] font-black uppercase tracking-wider text-zinc-400">Quedan</p>
+            <p className="mt-1 text-2xl font-black text-zinc-900">{resumenMes.diasRestantes}</p>
+            <p className="text-xs font-bold text-zinc-500">días del mes</p>
+          </div>
+          <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-4">
+            <p className="text-[11px] font-black uppercase tracking-wider text-emerald-700">Gastado</p>
+            <p className="mt-1 text-2xl font-black text-emerald-700">
+              {resumenMes.pctPresupuesto === null ? '-' : `${resumenMes.pctPresupuesto.toFixed(0)}%`}
+            </p>
+            <p className="text-xs font-bold text-emerald-700/70">del presupuesto</p>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <div className="rounded-2xl bg-zinc-900 text-white p-4">
+            <p className="text-[11px] font-black uppercase tracking-wider text-zinc-400">Promedio actual</p>
+            <p className="mt-1 text-lg font-black">${resumenMes.promedioActual.toLocaleString('es-UY', { maximumFractionDigits: 0 })}</p>
+            <p className="text-xs font-bold text-zinc-400">por día</p>
+          </div>
+          <div className="rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
+            <p className="text-[11px] font-black uppercase tracking-wider text-zinc-400">Recomendado</p>
+            <p className="mt-1 text-lg font-black text-zinc-900">
+              {resumenMes.promedioRecomendado === null ? '-' : `$${resumenMes.promedioRecomendado.toLocaleString('es-UY', { maximumFractionDigits: 0 })}`}
+            </p>
+            <p className="text-xs font-bold text-zinc-500">según presupuesto</p>
+          </div>
         </div>
       </section>
 
@@ -640,8 +808,10 @@ export default function Home({ user, onAddExpense }) {
         {showFilters && (
           <div className="mt-3 grid grid-cols-2 gap-2">
             <select value={filters.periodo} onChange={(e) => setFilters((actual) => ({ ...actual, periodo: e.target.value }))} className="p-3 rounded-2xl bg-zinc-50 border border-zinc-100 text-sm font-bold outline-none">
+              <option value="hoy">Hoy</option>
               <option value="mes">Este mes</option>
               <option value="semana">Esta semana</option>
+              <option value="todos">Todos</option>
             </select>
             <input
               type="month"
@@ -914,6 +1084,48 @@ export default function Home({ user, onAddExpense }) {
           </div>
         </section>
       )}
+
+      <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
+        <div className="flex items-center gap-2 mb-3">
+          <MessageCircle size={18} className="text-emerald-600" />
+          <h2 className="font-black text-zinc-900">Chat financiero</h2>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {['¿En qué gasté más este mes?', '¿Voy bien con el presupuesto?', '¿Qué tengo pendiente de revisar?'].map(pregunta => (
+            <button
+              key={pregunta}
+              type="button"
+              onClick={() => preguntarChat(pregunta)}
+              className="px-3 py-2 rounded-full bg-zinc-100 text-zinc-600 text-xs font-black"
+            >
+              {pregunta}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={chatPregunta}
+            onChange={(e) => setChatPregunta(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') preguntarChat(chatPregunta);
+            }}
+            placeholder="Preguntá sobre tus gastos..."
+            className="min-w-0 flex-1 p-3 rounded-2xl bg-zinc-50 border border-zinc-100 outline-none text-sm font-medium"
+          />
+          <button
+            type="button"
+            onClick={() => preguntarChat(chatPregunta)}
+            className="px-4 rounded-2xl bg-zinc-900 text-white font-black text-sm"
+          >
+            OK
+          </button>
+        </div>
+        {chatRespuesta && (
+          <div className="mt-3 rounded-2xl bg-emerald-50 border border-emerald-100 p-4">
+            <p className="text-sm font-bold leading-6 text-emerald-950">{chatRespuesta}</p>
+          </div>
+        )}
+      </section>
 
       <section className="space-y-3">
         <div className="flex items-end justify-between">

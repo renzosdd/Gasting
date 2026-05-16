@@ -109,6 +109,8 @@ Objetivo:
 - También sirve para transcripciones de voz donde el usuario puede mencionar uno o varios gastos en una frase.
 - Si el contenido es voz:
   - separá múltiples gastos si aparecen varios importes o conceptos;
+  - ejemplo: "ayer gasté 1200 en super y 700 de nafta" debe devolver dos gastos separados, ambos con fecha de ayer;
+  - cuando una fecha relativa como ayer, hoy o anteayer aplica a toda la frase, aplicala a cada gasto separado;
   - inferí categoría/subcategoría solo cuando sea razonable;
   - mantené la descripción natural y breve;
   - no inventes importes que no hayan sido dichos.

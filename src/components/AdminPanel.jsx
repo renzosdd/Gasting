@@ -14,18 +14,59 @@ const TIPOS_DESTINO = [
 const normalizarEmail = (email) => email.trim().toLowerCase();
 
 const CATEGORIAS_BASE = [
-  { nombre: 'Alimentación', tipoDestino: 'general', subcategorias: ['Supermercado', 'Restaurante', 'Delivery', 'Carnicería', 'Verdulería'] },
-  { nombre: 'Transporte', tipoDestino: 'general', subcategorias: ['Ómnibus', 'Taxi/App', 'Estacionamiento', 'Peajes'] },
-  { nombre: 'Salud', tipoDestino: 'general', subcategorias: ['Farmacia', 'Consulta médica', 'Estudios', 'Seguro médico'] },
-  { nombre: 'Educación', tipoDestino: 'general', subcategorias: ['Cuotas', 'Materiales', 'Cursos'] },
-  { nombre: 'Ropa y cuidado', tipoDestino: 'general', subcategorias: ['Ropa', 'Calzado', 'Peluquería'] },
-  { nombre: 'Entretenimiento', tipoDestino: 'general', subcategorias: ['Streaming', 'Salidas', 'Eventos'] },
-  { nombre: 'Vehículo', tipoDestino: 'vehiculo', subcategorias: ['Combustible', 'Service', 'Seguro', 'Patente', 'Reparación', 'Lavado'] },
-  { nombre: 'Casa', tipoDestino: 'hogar', subcategorias: ['UTE', 'OSE', 'Internet', 'Alquiler', 'Gastos comunes', 'Mantenimiento', 'Impuestos'] },
-  { nombre: 'Tarjeta de crédito', tipoDestino: 'tarjeta', subcategorias: ['Pago de tarjeta', 'Cuotas', 'Intereses', 'Comisiones'] },
+  { nombre: 'Alimentación', tipoDestino: 'general', subcategorias: ['Supermercado', 'Restaurante', 'Delivery', 'Carnicería', 'Verdulería', 'Panadería', 'Feria', 'Almacén'] },
+  { nombre: 'Transporte', tipoDestino: 'general', subcategorias: ['Ómnibus', 'Taxi/App', 'Estacionamiento', 'Peajes', 'STM', 'Viajes'] },
+  { nombre: 'Salud', tipoDestino: 'general', subcategorias: ['Farmacia', 'Consulta médica', 'Estudios', 'Seguro médico', 'Odontólogo', 'Óptica'] },
+  { nombre: 'Educación', tipoDestino: 'general', subcategorias: ['Cuotas', 'Materiales', 'Cursos', 'Libros', 'Actividades'] },
+  { nombre: 'Hijos', tipoDestino: 'general', subcategorias: ['Colegio', 'Ropa', 'Juguetes', 'Pañales', 'Actividades', 'Salud'] },
+  { nombre: 'Mascotas', tipoDestino: 'general', subcategorias: ['Alimento', 'Veterinaria', 'Medicamentos', 'Peluquería', 'Accesorios'] },
+  { nombre: 'Ropa y cuidado', tipoDestino: 'general', subcategorias: ['Ropa', 'Calzado', 'Peluquería', 'Perfumería', 'Gimnasio'] },
+  { nombre: 'Entretenimiento', tipoDestino: 'general', subcategorias: ['Streaming', 'Salidas', 'Eventos', 'Cine', 'Vacaciones'] },
+  { nombre: 'Impuestos y trámites', tipoDestino: 'general', subcategorias: ['DGI', 'BPS', 'Intendencia', 'Trámites', 'Multas'] },
+  { nombre: 'Trabajo', tipoDestino: 'general', subcategorias: ['Herramientas', 'Software', 'Oficina', 'Viáticos'] },
+  { nombre: 'Ahorro e inversión', tipoDestino: 'general', subcategorias: ['Ahorro', 'Inversión', 'Fondo de emergencia'] },
+  { nombre: 'Vehículo', tipoDestino: 'vehiculo', subcategorias: ['Combustible', 'Service', 'Seguro', 'Patente', 'Reparación', 'Lavado', 'Cubiertas', 'Parking', 'Peajes'] },
+  { nombre: 'Casa', tipoDestino: 'hogar', subcategorias: ['UTE', 'OSE', 'Antel/Internet', 'Internet', 'Alquiler', 'Gastos comunes', 'Mantenimiento', 'Impuestos', 'Contribución inmobiliaria', 'Tributos domiciliarios', 'Supergas'] },
+  { nombre: 'Tarjeta de crédito', tipoDestino: 'tarjeta', subcategorias: ['Pago de tarjeta', 'Cuotas', 'Intereses', 'Comisiones', 'Seguro de saldo', 'Débitos automáticos'] },
 ];
 
 const EMPTY_REGLA_GLOBAL = { patron: '', tipoDestino: 'general', categoriaGrupo: '', subcategoria: '', prioridad: 10 };
+
+const tokensNombre = (valor = '') => normalizar(valor)
+  .replace(/[^a-z0-9\s]/g, ' ')
+  .split(/\s+/)
+  .filter(token => token.length > 2);
+
+const distanciaLevenshtein = (a = '', b = '') => {
+  const left = normalizar(a).replace(/\s+/g, '');
+  const right = normalizar(b).replace(/\s+/g, '');
+  if (!left || !right) return Math.max(left.length, right.length);
+  const matrix = Array.from({ length: left.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= right.length; j += 1) matrix[0][j] = j;
+  for (let i = 1; i <= left.length; i += 1) {
+    for (let j = 1; j <= right.length; j += 1) {
+      matrix[i][j] = left[i - 1] === right[j - 1]
+        ? matrix[i - 1][j - 1]
+        : Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
+    }
+  }
+  return matrix[left.length][right.length];
+};
+
+const nombresParecidos = (a = '', b = '') => {
+  const left = normalizar(a).trim();
+  const right = normalizar(b).trim();
+  if (!left || !right || left === right) return left === right;
+  if (left.includes(right) || right.includes(left)) return Math.min(left.length, right.length) >= 4;
+  const leftTokens = new Set(tokensNombre(left));
+  const rightTokens = new Set(tokensNombre(right));
+  const intersection = [...leftTokens].filter(token => rightTokens.has(token)).length;
+  const union = new Set([...leftTokens, ...rightTokens]).size || 1;
+  const tokenScore = intersection / union;
+  const distance = distanciaLevenshtein(left, right);
+  const charScore = 1 - (distance / Math.max(left.replace(/\s+/g, '').length, right.replace(/\s+/g, '').length, 1));
+  return tokenScore >= 0.5 || charScore >= 0.78;
+};
 
 const normalizarSubcategorias = (items = []) => (
   items
@@ -71,6 +112,8 @@ export default function AdminPanel({ user }) {
   const [categoriaSugerencias, setCategoriaSugerencias] = useState([]);
   const [productosAgregados, setProductosAgregados] = useState([]);
   const [reglasGlobales, setReglasGlobales] = useState([]);
+  const [gastos, setGastos] = useState([]);
+  const [presupuestos, setPresupuestos] = useState([]);
   const [productoEdits, setProductoEdits] = useState({});
   const [formReglaGlobal, setFormReglaGlobal] = useState(EMPTY_REGLA_GLOBAL);
   const [editandoReglaGlobalId, setEditandoReglaGlobalId] = useState('');
@@ -105,7 +148,13 @@ export default function AdminPanel({ user }) {
     const unsubReglas = onSnapshot(collection(db, 'reglas_categorizacion_globales'), (snapshot) => {
       setReglasGlobales(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-    return () => { unsubCat(); unsubAdmins(); unsubSugerencias(); unsubCategoriaSugerencias(); unsubProductos(); unsubReglas(); };
+    const unsubGastos = onSnapshot(collection(db, 'gastos'), (snapshot) => {
+      setGastos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubPresupuestos = onSnapshot(collection(db, 'presupuestos'), (snapshot) => {
+      setPresupuestos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => { unsubCat(); unsubAdmins(); unsubSugerencias(); unsubCategoriaSugerencias(); unsubProductos(); unsubReglas(); unsubGastos(); unsubPresupuestos(); };
   }, []);
 
   const categoriasOrdenadas = useMemo(() => (
@@ -115,13 +164,27 @@ export default function AdminPanel({ user }) {
   ), [categorias]);
 
   const categoriasParecidas = useMemo(() => {
-    const grupos = new Map();
-    categoriasOrdenadas.forEach((categoria) => {
-      const key = `${categoria.tipoDestino || 'general'}:${normalizar(categoria.nombre).replace(/\s+/g, ' ').trim()}`;
-      const existentes = grupos.get(key) || [];
-      grupos.set(key, [...existentes, categoria]);
+    const pares = [];
+    categoriasOrdenadas.forEach((categoria, index) => {
+      categoriasOrdenadas.slice(index + 1).forEach((otra) => {
+        if ((categoria.tipoDestino || 'general') !== (otra.tipoDestino || 'general')) return;
+        if (nombresParecidos(categoria.nombre, otra.nombre)) pares.push([categoria, otra]);
+      });
     });
-    return [...grupos.values()].filter(grupo => grupo.length > 1);
+    return pares.slice(0, 8);
+  }, [categoriasOrdenadas]);
+
+  const subcategoriasParecidas = useMemo(() => {
+    const pares = [];
+    categoriasOrdenadas.forEach((categoria) => {
+      const subs = Array.isArray(categoria.subcategorias) ? categoria.subcategorias.map(getSubcategoriaNombre).filter(Boolean) : [];
+      subs.forEach((subcategoria, index) => {
+        subs.slice(index + 1).forEach((otra) => {
+          if (nombresParecidos(subcategoria, otra)) pares.push({ categoria, origen: subcategoria, destino: otra });
+        });
+      });
+    });
+    return pares.slice(0, 8);
   }, [categoriasOrdenadas]);
 
   const categoriaSubMerge = useMemo(() => (
@@ -133,6 +196,28 @@ export default function AdminPanel({ user }) {
       ? categoriaSubMerge.subcategorias.map(getSubcategoriaNombre).filter(Boolean)
       : []
   ), [categoriaSubMerge]);
+
+  const impactoCategoriaMerge = useMemo(() => {
+    const origen = categoriasOrdenadas.find(categoria => categoria.id === mergeCategoriaOrigen);
+    if (!origen) return null;
+    return {
+      gastos: gastos.filter(gasto => gasto.categoriaId === origen.id || gasto.categoriaGrupo === origen.nombre || gasto.categoria === origen.nombre).length,
+      presupuestos: presupuestos.filter(presupuesto => presupuesto.categoriaGrupo === origen.nombre).length,
+      sugerencias: sugerencias.filter(sugerencia => sugerencia.categoriaId === origen.id || sugerencia.categoriaNombre === origen.nombre).length,
+    };
+  }, [categoriasOrdenadas, gastos, mergeCategoriaOrigen, presupuestos, sugerencias]);
+
+  const impactoSubcategoriaMerge = useMemo(() => {
+    if (!categoriaSubMerge || !mergeSubOrigen) return null;
+    return {
+      gastos: gastos.filter(gasto => (
+        gasto.subcategoria === mergeSubOrigen
+        && (gasto.categoriaId === categoriaSubMerge.id || gasto.categoriaGrupo === categoriaSubMerge.nombre)
+      )).length,
+      presupuestos: presupuestos.filter(presupuesto => presupuesto.categoriaGrupo === categoriaSubMerge.nombre && presupuesto.subcategoria === mergeSubOrigen).length,
+      sugerencias: sugerencias.filter(sugerencia => sugerencia.nombre === mergeSubOrigen && (sugerencia.categoriaId === categoriaSubMerge.id || sugerencia.categoriaNombre === categoriaSubMerge.nombre)).length,
+    };
+  }, [categoriaSubMerge, gastos, mergeSubOrigen, presupuestos, sugerencias]);
 
   const categoriasReglaGlobal = useMemo(() => (
     categoriasOrdenadas.filter(categoria => (categoria.tipoDestino || 'general') === formReglaGlobal.tipoDestino)
@@ -704,17 +789,41 @@ export default function AdminPanel({ user }) {
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
         <div className="flex items-center gap-2 mb-4">
           <GitMerge size={20} className="text-emerald-600" />
-          <h2 className="text-xl font-bold text-zinc-800">Unificar duplicados</h2>
+          <h2 className="text-xl font-bold text-zinc-800">Asistente de limpieza</h2>
         </div>
 
-        {categoriasParecidas.length > 0 && (
+        {(categoriasParecidas.length > 0 || subcategoriasParecidas.length > 0) && (
           <div className="mb-5 rounded-2xl bg-amber-50 border border-amber-100 p-4">
-            <p className="text-xs font-bold uppercase tracking-wider text-amber-700 mb-2">Posibles duplicados</p>
-            <div className="space-y-1">
-              {categoriasParecidas.map((grupo) => (
-                <p key={grupo.map(item => item.id).join('-')} className="text-sm text-amber-900">
-                  {grupo.map(item => item.nombre).join(' / ')} · {grupo[0].tipoDestino || 'general'}
-                </p>
+            <p className="text-xs font-bold uppercase tracking-wider text-amber-700 mb-3">Posibles duplicados</p>
+            <div className="space-y-2">
+              {categoriasParecidas.map(([origen, destino]) => (
+                <button
+                  key={`${origen.id}-${destino.id}`}
+                  type="button"
+                  onClick={() => {
+                    setMergeCategoriaOrigen(origen.id);
+                    setMergeCategoriaDestino(destino.id);
+                  }}
+                  className="w-full text-left p-3 rounded-xl bg-white/70 border border-amber-100 text-sm text-amber-950"
+                >
+                  <span className="font-black">{origen.nombre}</span> → <span className="font-black">{destino.nombre}</span>
+                  <span className="block text-xs font-bold text-amber-700">{origen.tipoDestino || 'general'}</span>
+                </button>
+              ))}
+              {subcategoriasParecidas.map((item) => (
+                <button
+                  key={`${item.categoria.id}-${item.origen}-${item.destino}`}
+                  type="button"
+                  onClick={() => {
+                    setMergeSubCategoriaId(item.categoria.id);
+                    setMergeSubOrigen(item.origen);
+                    setMergeSubDestino(item.destino);
+                  }}
+                  className="w-full text-left p-3 rounded-xl bg-white/70 border border-amber-100 text-sm text-amber-950"
+                >
+                  <span className="font-black">{item.origen}</span> → <span className="font-black">{item.destino}</span>
+                  <span className="block text-xs font-bold text-amber-700">{item.categoria.nombre}</span>
+                </button>
               ))}
             </div>
           </div>
@@ -744,6 +853,11 @@ export default function AdminPanel({ user }) {
               ))}
             </select>
           </div>
+          {impactoCategoriaMerge && (
+            <div className="rounded-2xl bg-zinc-50 border border-zinc-100 p-3 text-xs font-bold text-zinc-600">
+              Impacto estimado: {impactoCategoriaMerge.gastos} gastos, {impactoCategoriaMerge.presupuestos} presupuestos y {impactoCategoriaMerge.sugerencias} sugerencias.
+            </div>
+          )}
           <button
             onClick={mergeCategorias}
             disabled={!mergeCategoriaOrigen || !mergeCategoriaDestino || mergeCategoriaOrigen === mergeCategoriaDestino}
@@ -787,6 +901,11 @@ export default function AdminPanel({ user }) {
               {subcategoriasMerge.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
             </select>
           </div>
+          {impactoSubcategoriaMerge && (
+            <div className="rounded-2xl bg-zinc-50 border border-zinc-100 p-3 text-xs font-bold text-zinc-600">
+              Impacto estimado: {impactoSubcategoriaMerge.gastos} gastos, {impactoSubcategoriaMerge.presupuestos} presupuestos y {impactoSubcategoriaMerge.sugerencias} sugerencias.
+            </div>
+          )}
           <button
             onClick={mergeSubcategorias}
             disabled={!mergeSubOrigen || !mergeSubDestino || mergeSubOrigen === mergeSubDestino}
