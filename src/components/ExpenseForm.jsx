@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { db } from '../firebase';
-import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
+import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, Timestamp, where, writeBatch } from 'firebase/firestore';
 import { CarFront, CreditCard, FileText, Home, Mic, Plus, Sparkles, Wallet, X } from 'lucide-react';
 import { extractTextFromDocument } from '../utils/localOcr';
-import { canonicalProductKey, getSubcategoriaNombre, normalizar, normalizarProducto, suggestionToExpensePayload } from '../utils/expenseUtils';
+import { canonicalProductKey, dateInputToDate, getSubcategoriaNombre, normalizar, normalizarProducto, suggestionToExpensePayload, todayInputValue } from '../utils/expenseUtils';
 
 const TIPOS_DESTINO = [
   { id: 'general', label: 'General', icon: Wallet },
@@ -12,12 +12,46 @@ const TIPOS_DESTINO = [
   { id: 'tarjeta', label: 'Tarjeta', icon: CreditCard },
 ];
 
+const PLANTILLAS_RAPIDAS = [
+  { label: 'Super', tipoDestino: 'general', categoria: 'Alimentación', subcategoria: 'Supermercado' },
+  { label: 'Nafta', tipoDestino: 'vehiculo', categoria: 'Vehículo', subcategoria: 'Combustible' },
+  { label: 'UTE', tipoDestino: 'hogar', categoria: 'Casa', subcategoria: 'UTE' },
+  { label: 'OSE', tipoDestino: 'hogar', categoria: 'Casa', subcategoria: 'OSE' },
+  { label: 'Tarjeta', tipoDestino: 'tarjeta', categoria: 'Tarjeta de crédito', subcategoria: 'Pago de tarjeta' },
+];
+
 const fileToBase64 = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => resolve(String(reader.result).split(',')[1]);
   reader.onerror = reject;
   reader.readAsDataURL(file);
 });
+
+const fileSourceType = (file) => {
+  if (!file) return 'document';
+  return /\.(csv|tsv|xlsx|xls)$/i.test(file.name || '') ? 'spreadsheet' : 'document';
+};
+
+const fechaSugeridaToTimestamp = (fecha) => {
+  if (!fecha) return serverTimestamp();
+  const date = dateInputToDate(fecha);
+  return Timestamp.fromDate(date);
+};
+
+const fechaComparable = (fecha) => {
+  if (!fecha) return '';
+  const date = fecha?.toDate?.() || (fecha instanceof Date ? fecha : dateInputToDate(fecha));
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const duplicateKey = ({ fecha, monto, moneda, descripcion = '', categoriaGrupo = '', subcategoria = '' }) => (
+  [
+    fechaComparable(fecha),
+    Number(monto || 0).toFixed(2),
+    moneda || 'UYU',
+    normalizar(`${descripcion} ${categoriaGrupo} ${subcategoria}`).replace(/\s+/g, ' ').trim(),
+  ].join('|')
+);
 
 const campoExtra = (subcategoria, tipoDestino) => {
   const nombre = normalizar(subcategoria);
@@ -51,6 +85,8 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
   const [vehiculoId, setVehiculoId] = useState('');
   const [hogarId, setHogarId] = useState('');
   const [tarjetaId, setTarjetaId] = useState('');
+  const [fechaGasto, setFechaGasto] = useState(todayInputValue());
+  const [comentario, setComentario] = useState('');
   const [estadoCuentaFile, setEstadoCuentaFile] = useState(null);
   const [subcategoriaSugerida, setSubcategoriaSugerida] = useState('');
   const [categoriaSugerida, setCategoriaSugerida] = useState('');
@@ -70,6 +106,9 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
 
   const [categorias, setCategorias] = useState([]);
   const [categoriasUsuario, setCategoriasUsuario] = useState([]);
+  const [gastosExistentes, setGastosExistentes] = useState([]);
+  const [reglasUsuario, setReglasUsuario] = useState([]);
+  const [reglasGlobales, setReglasGlobales] = useState([]);
   const [vehiculos, setVehiculos] = useState([]);
   const [hogares, setHogares] = useState([]);
   const [tarjetas, setTarjetas] = useState([]);
@@ -86,6 +125,17 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
   }, [user.uid]);
 
   useEffect(() => {
+    const gastosQuery = query(collection(db, 'gastos'), where('userId', '==', user.uid));
+    const reglasQuery = query(collection(db, 'reglas_categorizacion'), where('userId', '==', user.uid));
+    const unsubGastos = onSnapshot(gastosQuery, (snapshot) => {
+      setGastosExistentes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubReglas = onSnapshot(reglasQuery, (snapshot) => {
+      setReglasUsuario(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubReglasGlobales = onSnapshot(collection(db, 'reglas_categorizacion_globales'), (snapshot) => {
+      setReglasGlobales(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), global: true })));
+    });
     const vehiculosQuery = query(collection(db, 'vehiculos'), where('propietarios', 'array-contains', user.uid));
     const hogaresQuery = query(collection(db, 'hogares'), where('propietarios', 'array-contains', user.uid));
     const tarjetasQuery = query(collection(db, 'tarjetas'), where('propietarios', 'array-contains', user.uid));
@@ -100,7 +150,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
       setTarjetas(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    return () => { unsubVehiculos(); unsubHogares(); unsubTarjetas(); };
+    return () => { unsubGastos(); unsubReglas(); unsubReglasGlobales(); unsubVehiculos(); unsubHogares(); unsubTarjetas(); };
   }, [user.uid]);
 
   const categoriasDisponibles = useMemo(() => {
@@ -123,6 +173,16 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     Array.isArray(categoriaSeleccionada?.subcategorias) ? categoriaSeleccionada.subcategorias : []
   ), [categoriaSeleccionada]);
   const camposExtra = campoExtra(subcategoria, tipoDestino);
+  const duplicateKeysExistentes = useMemo(() => (
+    new Set(gastosExistentes.map(gasto => duplicateKey({
+      fecha: gasto.fecha,
+      monto: gasto.monto,
+      moneda: gasto.moneda || 'UYU',
+      descripcion: gasto.detalles?.descripcion || gasto.detalles?.comentario || gasto.categoria || '',
+      categoriaGrupo: gasto.categoriaGrupo || '',
+      subcategoria: gasto.subcategoria || '',
+    })))
+  ), [gastosExistentes]);
 
   useEffect(() => {
     const primera = categoriasFiltradas[0];
@@ -140,6 +200,43 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
   };
 
   const getCategoriaNombre = () => categoriaSeleccionada?.nombre || '';
+
+  const encontrarCategoria = (nombre, destino = tipoDestino) => (
+    categoriasDisponibles.find(categoria => (
+      (categoria.tipoDestino || 'general') === destino
+      && normalizar(categoria.nombre) === normalizar(nombre)
+    ))
+  );
+
+  const aplicarPlantilla = (plantilla) => {
+    const categoria = encontrarCategoria(plantilla.categoria, plantilla.tipoDestino);
+    setTipoDestino(plantilla.tipoDestino);
+    setCategoriaId(categoria?.id || '');
+    setSubcategoria(plantilla.subcategoria);
+  };
+
+  const reglaParaTexto = (texto = '') => {
+    const normalizado = normalizar(texto);
+    return [...reglasUsuario, ...reglasGlobales]
+      .filter(regla => regla.patron && normalizado.includes(normalizar(regla.patron)))
+      .sort((a, b) => Number(b.prioridad || 0) - Number(a.prioridad || 0))[0];
+  };
+
+  const aplicarReglasLocales = (sugerencias) => sugerencias.map((sugerencia) => {
+    const regla = reglaParaTexto(`${sugerencia.descripcion || ''} ${sugerencia.categoriaGrupo || ''} ${sugerencia.subcategoria || ''}`);
+    if (!regla) return sugerencia;
+
+    const deberiaAplicar = !sugerencia.categoriaGrupo || Number(sugerencia.confianza || 0) < 0.82;
+    if (!deberiaAplicar) return sugerencia;
+
+    return {
+      ...sugerencia,
+      tipoDestino: regla.tipoDestino || sugerencia.tipoDestino || 'general',
+      categoriaGrupo: regla.categoriaGrupo || sugerencia.categoriaGrupo || '',
+      subcategoria: regla.subcategoria || sugerencia.subcategoria || '',
+      notas: `${sugerencia.notas || ''}${sugerencia.notas ? ' ' : ''}Aplicado por regla: ${regla.patron}.`.trim(),
+    };
+  });
 
   const sugerirCategoria = async () => {
     const nombre = categoriaSugerida.trim();
@@ -227,6 +324,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
       tipoDestino: categoriaDetectada?.tipoDestino || tipoDetectado,
       categoriaGrupo: categoriaDetectada?.nombre || '',
       subcategoria: subDetectada ? getSubcategoriaNombre(subDetectada) : '',
+      fecha: todayInputValue(),
       confianza: montoMatch ? 0.78 : 0.55,
       notas: 'Revisá la categoría y el monto antes de guardar.',
       source: 'voz',
@@ -300,15 +398,15 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
       setProcessingLabel('Ordenando tus gastos...');
       try {
         const suggestions = await analizarTextoVoz(texto);
-        const finalSuggestions = suggestions.length > 0 ? suggestions : [buildVoiceSuggestion(texto)];
+        const finalSuggestions = marcarDuplicados(aplicarReglasLocales(suggestions.length > 0 ? suggestions : [buildVoiceSuggestion(texto)]));
         setDocumentSuggestions(finalSuggestions);
-        setSelectedSuggestions(Object.fromEntries(finalSuggestions.map(item => [item.id, true])));
+        setSelectedSuggestions(Object.fromEntries(finalSuggestions.map(item => [item.id, !item.posibleDuplicado])));
         setVoiceStatus('');
       } catch (error) {
         console.error('Error al interpretar voz con IA:', error);
-        const fallback = buildVoiceSuggestion(texto);
+        const fallback = marcarDuplicados(aplicarReglasLocales([buildVoiceSuggestion(texto)]))[0];
         setDocumentSuggestions([fallback]);
-        setSelectedSuggestions({ [fallback.id]: true });
+        setSelectedSuggestions({ [fallback.id]: !fallback.posibleDuplicado });
         setVoiceStatus('No pude usar IA para la voz, te dejé una sugerencia básica.');
       } finally {
         setProcessingReview(false);
@@ -356,7 +454,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
         body: JSON.stringify({
           fileName: estadoCuentaFile.name,
           mimeType: estadoCuentaFile.type || 'application/octet-stream',
-          sourceType: 'document',
+          sourceType: fileSourceType(estadoCuentaFile),
           extractedText,
           fileData,
           categorias: categoriasDisponibles.map(categoria => ({
@@ -379,12 +477,12 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
         throw new Error(data.error || 'No se pudo analizar el documento.');
       }
 
-      const suggestions = (data.gastos || []).map((gasto, index) => ({
+      const suggestions = marcarDuplicados(aplicarReglasLocales((data.gastos || []).map((gasto, index) => ({
         ...gasto,
         id: `suggestion-${Date.now()}-${index}`,
-      }));
+      }))));
       setDocumentSuggestions(suggestions);
-      setSelectedSuggestions(Object.fromEntries(suggestions.map(item => [item.id, Number(item.confianza || 0) >= 0.65])));
+      setSelectedSuggestions(Object.fromEntries(suggestions.map(item => [item.id, Number(item.confianza || 0) >= 0.65 && !item.posibleDuplicado])));
       setDocumentStatus(data.resumen || 'Documento analizado.');
       setProcessingReview(false);
       setProcessingLabel('');
@@ -419,11 +517,51 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
     setDocumentSuggestions((actual) => actual.map(item => item.id === id ? { ...item, ...patch } : item));
   };
 
+  const marcarDuplicados = (sugerencias) => {
+    const seenInImport = new Set();
+    return sugerencias.map((sugerencia) => {
+      const key = duplicateKey({
+        fecha: sugerencia.fecha,
+        monto: sugerencia.monto,
+        moneda: sugerencia.moneda || 'UYU',
+        descripcion: sugerencia.descripcion || '',
+        categoriaGrupo: sugerencia.categoriaGrupo || '',
+        subcategoria: sugerencia.subcategoria || '',
+      });
+      const duplicadoExistente = duplicateKeysExistentes.has(key);
+      const duplicadoEnImportacion = seenInImport.has(key);
+      seenInImport.add(key);
+      return {
+        ...sugerencia,
+        duplicateKey: key,
+        posibleDuplicado: duplicadoExistente || duplicadoEnImportacion,
+        duplicateReason: duplicadoExistente ? 'Ya existe un gasto muy parecido.' : duplicadoEnImportacion ? 'Se repite dentro de esta importación.' : '',
+      };
+    });
+  };
+
   const guardarSugerenciasSeleccionadas = async () => {
-    const seleccionadas = documentSuggestions.filter(item => selectedSuggestions[item.id]);
+    const sugerenciasRevisadas = marcarDuplicados(documentSuggestions);
+    const seleccionadas = sugerenciasRevisadas.filter(item => selectedSuggestions[item.id]);
     if (seleccionadas.length === 0) return;
 
-    const batch = writeBatch(db);
+    const importRef = doc(collection(db, 'importaciones'));
+    const sourceType = reviewMode === 'voz' ? 'voice' : fileSourceType(estadoCuentaFile);
+    const operations = [{
+      ref: importRef,
+      data: {
+        userId: user.uid,
+        archivoNombre: estadoCuentaFile?.name || (reviewMode === 'voz' ? 'Carga por voz' : 'Carga inteligente'),
+        sourceType,
+        totalSugerencias: sugerenciasRevisadas.length,
+        gastosGuardados: seleccionadas.length,
+        posiblesDuplicados: seleccionadas.filter(item => item.posibleDuplicado).length,
+        estado: 'pendiente_revision',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+    }];
+
     seleccionadas.forEach((sugerencia) => {
       const gastoRef = doc(collection(db, 'gastos'));
       const productosConfiables = (sugerencia.productos || []).filter(producto => (
@@ -431,43 +569,60 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
         && Number(producto.confianza || 0) >= 0.72
         && Number(producto.precioTotal || 0) > 0
       ));
-      batch.set(gastoRef, {
-        ...suggestionToExpensePayload({
-          sugerencia,
-          userId: user.uid,
-          categorias: categoriasDisponibles,
-          sourceFileName: estadoCuentaFile?.name || '',
-        }),
-        tieneProductos: productosConfiables.length > 0,
-        fecha: serverTimestamp(),
+      operations.push({
+        ref: gastoRef,
+        data: {
+          ...suggestionToExpensePayload({
+            sugerencia,
+            userId: user.uid,
+            categorias: categoriasDisponibles,
+            sourceFileName: estadoCuentaFile?.name || '',
+          }),
+          importBatchId: importRef.id,
+          importSourceType: sourceType,
+          posibleDuplicado: Boolean(sugerencia.posibleDuplicado),
+          duplicateKey: sugerencia.duplicateKey || null,
+          tieneProductos: productosConfiables.length > 0,
+          fecha: fechaSugeridaToTimestamp(sugerencia.fecha),
+          createdAt: serverTimestamp(),
+        },
       });
       productosConfiables.forEach((producto) => {
         const productoRef = doc(collection(db, 'producto_precios'));
         const nombreNormalizado = normalizarProducto(producto.nombre);
         const productoKey = canonicalProductKey(producto.nombre, producto.marca, producto.unidad);
-        batch.set(productoRef, {
-          userId: user.uid,
-          gastoId: gastoRef.id,
-          nombre: producto.nombre,
-          nombreNormalizado,
-          productoKey,
-          marca: producto.marca || '',
-          cantidad: Number(producto.cantidad || 1),
-          unidad: producto.unidad || 'unidad',
-          precioUnitario: Number(producto.precioUnitario || 0),
-          precioTotal: Number(producto.precioTotal || 0),
-          moneda: sugerencia.moneda || 'UYU',
-          comercio: sugerencia.descripcion || '',
-          confianza: Number(producto.confianza || 0),
-          fecha: serverTimestamp(),
-          origen: sugerencia.source === 'voz' ? 'voz_ia' : 'documento_ia',
-          estadoAgregado: 'pendiente_anonimizar',
+        operations.push({
+          ref: productoRef,
+          data: {
+            userId: user.uid,
+            gastoId: gastoRef.id,
+            importBatchId: importRef.id,
+            nombre: producto.nombre,
+            nombreNormalizado,
+            productoKey,
+            marca: producto.marca || '',
+            cantidad: Number(producto.cantidad || 1),
+            unidad: producto.unidad || 'unidad',
+            precioUnitario: Number(producto.precioUnitario || 0),
+            precioTotal: Number(producto.precioTotal || 0),
+            moneda: sugerencia.moneda || 'UYU',
+            comercio: sugerencia.descripcion || '',
+            confianza: Number(producto.confianza || 0),
+            fecha: fechaSugeridaToTimestamp(sugerencia.fecha),
+            createdAt: serverTimestamp(),
+            origen: sugerencia.source === 'voz' ? 'voz_ia' : 'documento_ia',
+            estadoAgregado: 'pendiente_anonimizar',
+          },
         });
       });
     });
 
-    await batch.commit();
-    const restantes = documentSuggestions.filter(item => !selectedSuggestions[item.id]);
+    for (let index = 0; index < operations.length; index += 450) {
+      const batch = writeBatch(db);
+      operations.slice(index, index + 450).forEach(({ ref, data }) => batch.set(ref, data));
+      await batch.commit();
+    }
+    const restantes = sugerenciasRevisadas.filter(item => !selectedSuggestions[item.id]);
     setDocumentSuggestions(restantes);
     setSelectedSuggestions({});
     if (restantes.length === 0) {
@@ -499,6 +654,10 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
       const hogarSeleccionado = hogares.find(hogar => hogar.id === hogarId);
       const tarjetaSeleccionada = tarjetas.find(tarjeta => tarjeta.id === tarjetaId);
       const subcategoriaFinal = subcategoriaSugerida.trim() || subcategoria;
+      const detallesFinales = {
+        ...detalles,
+        comentario: comentario.trim(),
+      };
 
       batch.set(gastoRef, {
         userId: user.uid,
@@ -515,12 +674,13 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
         hogarNombre: tipoDestino === 'hogar' && hogarSeleccionado ? hogarSeleccionado.nombre : null,
         tarjetaId: tipoDestino === 'tarjeta' && tarjetaId ? tarjetaId : null,
         tarjetaNombre: tipoDestino === 'tarjeta' && tarjetaSeleccionada ? tarjetaSeleccionada.nombre || `${tarjetaSeleccionada.banco} ${tarjetaSeleccionada.marca}` : null,
-        detalles,
+        detalles: detallesFinales,
         estadoCuenta,
         estadoCuentaPendiente: tipoDestino === 'tarjeta' && !estadoCuenta,
         origen: tipoDestino === 'tarjeta' ? 'tarjeta_credito' : 'manual',
         estadoRevision: 'confirmado',
-        fecha: serverTimestamp(),
+        fecha: Timestamp.fromDate(dateInputToDate(fechaGasto)),
+        createdAt: serverTimestamp(),
       });
 
       if (tipoDestino === 'vehiculo' && vehiculoId && detalles.kilometraje) {
@@ -531,6 +691,8 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
 
       setMonto('');
       setMoneda('UYU');
+      setFechaGasto(todayInputValue());
+      setComentario('');
       setEstadoCuentaFile(null);
       setSubcategoriaSugerida('');
       setCategoriaSugerida('');
@@ -557,7 +719,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
           <p className="mt-2 text-sm leading-6 text-zinc-500">
             {initialAction === 'voice'
               ? 'Decí uno o varios gastos. Después vas a poder revisar todo antes de guardar.'
-              : 'Podés sacar una foto, subir una imagen o elegir un PDF. Después preparamos las sugerencias.'}
+              : 'Podés sacar una foto, subir una imagen, elegir un PDF o cargar una planilla. Después preparamos las sugerencias.'}
           </p>
           {initialAction === 'voice' ? (
             <div className="mt-6 flex items-center justify-center gap-2 text-emerald-600 font-bold text-sm">
@@ -566,11 +728,11 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
             </div>
           ) : (
             <label className="mt-6 w-full p-4 rounded-2xl bg-indigo-600 text-white font-black flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
-              <FileText size={18} /> Subir archivo o foto
+              <FileText size={18} /> Subir archivo, foto o planilla
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="application/pdf,image/*"
+                accept="application/pdf,image/*,.csv,.tsv,.xlsx,.xls"
                 capture="environment"
                 onChange={(e) => setEstadoCuentaFile(e.target.files?.[0] || null)}
                 className="hidden"
@@ -589,7 +751,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
           {initialAction !== 'manual' && (
             <div className="mb-5 w-full rounded-3xl bg-white border border-zinc-100 p-4 text-center shadow-sm">
               <p className="text-sm font-bold text-zinc-800">
-                {initialAction === 'voice' ? 'Dictá uno o varios gastos y los preparamos para revisar.' : 'Subí un ticket, boleta o resumen y revisá las sugerencias.'}
+                {initialAction === 'voice' ? 'Dictá uno o varios gastos y los preparamos para revisar.' : 'Subí un ticket, boleta, resumen o planilla y revisá las sugerencias.'}
               </p>
             </div>
           )}
@@ -618,6 +780,39 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
               </button>
             ))}
           </div>
+          <div className="mt-5 w-full max-w-sm grid grid-cols-1 gap-3">
+            <label className="text-left">
+              <span className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 ml-1">Fecha del gasto</span>
+              <input
+                type="date"
+                value={fechaGasto}
+                onChange={(e) => setFechaGasto(e.target.value)}
+                className="w-full p-4 bg-white border border-zinc-200 rounded-2xl text-zinc-800 font-bold outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </label>
+            <textarea
+              value={comentario}
+              onChange={(e) => setComentario(e.target.value)}
+              className="w-full p-4 bg-white border border-zinc-200 rounded-2xl text-zinc-800 outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+              rows={2}
+              placeholder="Comentario opcional"
+            />
+          </div>
+          <div className="mt-4 w-full max-w-sm">
+            <p className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-400 text-left">Plantillas rápidas</p>
+            <div className="grid grid-cols-5 gap-2">
+              {PLANTILLAS_RAPIDAS.map(plantilla => (
+                <button
+                  key={plantilla.label}
+                  type="button"
+                  onClick={() => aplicarPlantilla(plantilla)}
+                  className="min-h-11 rounded-2xl bg-white border border-zinc-200 text-[11px] font-black text-zinc-700 active:scale-95 transition-all"
+                >
+                  {plantilla.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <button
             type="button"
             onClick={iniciarVoz}
@@ -626,11 +821,11 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
             <Mic size={18} /> Agregar por voz
           </button>
           <label className={`mt-3 px-4 py-3 rounded-full bg-white border font-bold text-sm flex items-center gap-2 active:scale-95 transition-all shadow-sm cursor-pointer ${initialAction === 'document' ? 'border-indigo-200 text-indigo-700' : 'border-zinc-200 text-zinc-800'}`}>
-            <FileText size={18} /> Analizar documento
+            <FileText size={18} /> Analizar documento o planilla
             <input
               ref={fileInputRef}
               type="file"
-              accept="application/pdf,image/*"
+              accept="application/pdf,image/*,.csv,.tsv,.xlsx,.xls"
               capture="environment"
               onChange={(e) => setEstadoCuentaFile(e.target.files?.[0] || null)}
               className="hidden"
@@ -900,6 +1095,25 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
                               <option value="USD">Dólares</option>
                             </select>
                           </div>
+                          <input
+                            type="date"
+                            value={sugerencia.fecha || ''}
+                            onChange={(e) => updateSuggestion(sugerencia.id, { fecha: e.target.value })}
+                            className="w-full p-3 bg-white border border-zinc-100 rounded-xl outline-none font-bold"
+                          />
+                          <div className="flex flex-wrap gap-2">
+                            <span className={`px-3 py-1 rounded-full text-[11px] font-black ${
+                              Number(sugerencia.confianza || 0) >= 0.82
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : Number(sugerencia.confianza || 0) >= 0.65
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-red-100 text-red-600'
+                            }`}
+                            >
+                              Confianza {Math.round(Number(sugerencia.confianza || 0) * 100)}%
+                            </span>
+                            {sugerencia.source === 'voz' && <span className="px-3 py-1 rounded-full bg-zinc-100 text-zinc-500 text-[11px] font-black">Voz</span>}
+                          </div>
                           <select
                             value={sugerencia.tipoDestino || 'general'}
                             onChange={(e) => updateSuggestion(sugerencia.id, { tipoDestino: e.target.value, categoriaGrupo: '', subcategoria: '' })}
@@ -939,6 +1153,12 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
                               <p className="mt-1 text-xs text-emerald-700/70">Se guardan para comparar precios de forma agregada.</p>
                             </div>
                           )}
+                          {sugerencia.posibleDuplicado && (
+                            <div className="rounded-xl bg-amber-50 border border-amber-100 p-3">
+                              <p className="text-xs font-black text-amber-700">Posible duplicado</p>
+                              <p className="mt-1 text-xs text-amber-700/75">{sugerencia.duplicateReason || 'Revisá antes de guardarlo.'}</p>
+                            </div>
+                          )}
                           {sugerencia.notas && <p className="text-xs text-zinc-400">{sugerencia.notas}</p>}
                         </div>
                       </div>
@@ -952,7 +1172,7 @@ export default function ExpenseForm({ user, initialAction = 'manual', onSaved })
                   disabled={!documentSuggestions.some(item => selectedSuggestions[item.id])}
                   className="w-full mt-2 p-4 rounded-2xl bg-emerald-500 text-white font-bold disabled:opacity-50"
                 >
-                  Guardar seleccionados
+                  Guardar seleccionados ({documentSuggestions.filter(item => selectedSuggestions[item.id]).length})
                 </button>
               </div>
             )}

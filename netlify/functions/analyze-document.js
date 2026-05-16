@@ -105,6 +105,7 @@ Seguridad:
 Objetivo:
 - Extraer gastos sugeridos para que el usuario pueda confirmarlos antes de guardarlos.
 - Sirve para estados de cuenta de tarjeta, tickets de supermercado, facturas de servicios, recibos y boletas.
+- También sirve para planillas CSV/XLS/XLSX con histórico de gastos exportado desde bancos, tarjetas o planillas personales.
 - También sirve para transcripciones de voz donde el usuario puede mencionar uno o varios gastos en una frase.
 - Si el contenido es voz:
   - separá múltiples gastos si aparecen varios importes o conceptos;
@@ -126,6 +127,12 @@ Objetivo:
 - Si es factura de servicio:
   - usar tipoDestino "hogar" cuando corresponda;
   - extraer vencimiento en "fecha" si aparece.
+- Si es planilla:
+  - cada fila con fecha, concepto y monto debe convertirse en un gasto separado;
+  - ignorá filas de encabezado, totales, subtotales, saldos, transferencias internas o ingresos;
+  - si el monto viene negativo como egreso, guardá el valor absoluto;
+  - usá columnas como fecha, descripción, comercio, categoría, débito, importe, moneda o tarjeta cuando existan;
+  - si hay muchas filas, priorizá las filas con datos completos y de mayor confianza.
 - Usa las categorías existentes cuando calcen.
 - No inventes importes. Si no estás seguro, baja la confianza.
 - Moneda:

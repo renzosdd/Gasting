@@ -6,16 +6,27 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isImageUnderLimit() {
+      return request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
     match /vehiculos/{userId}/{fileName} {
-      allow read, write: if signedIn() && request.auth.uid == userId;
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId) && isImageUnderLimit();
     }
 
     match /hogares/{userId}/{fileName} {
-      allow read, write: if signedIn() && request.auth.uid == userId;
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId) && isImageUnderLimit();
     }
 
     match /estados-cuenta/{userId}/{fileName} {
-      allow read, write: if signedIn() && request.auth.uid == userId;
+      allow read, write: if isOwner(userId);
     }
   }
 }

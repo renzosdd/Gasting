@@ -79,6 +79,12 @@ service cloud.firestore {
       allow update: if isAdmin() || (ownsResourceUserField() && ownsUserField());
     }
 
+    match /importaciones/{importacionId} {
+      allow create: if ownsUserField();
+      allow read, delete: if ownsResourceUserField();
+      allow update: if ownsResourceUserField() && ownsUserField();
+    }
+
     match /subcategoria_sugerencias/{sugerenciaId} {
       allow create: if ownsUserField();
       allow read: if isAdmin() || ownsResourceUserField();
@@ -89,6 +95,17 @@ service cloud.firestore {
       allow create: if ownsUserField();
       allow read: if isAdmin() || ownsResourceUserField();
       allow update, delete: if isAdmin();
+    }
+
+    match /reglas_categorizacion/{reglaId} {
+      allow create: if ownsUserField();
+      allow read, delete: if ownsResourceUserField();
+      allow update: if ownsResourceUserField() && ownsUserField();
+    }
+
+    match /reglas_categorizacion_globales/{reglaId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
     }
 
     match /vehiculos/{vehiculoId} {

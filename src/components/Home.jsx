@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, Timestamp, updateDoc, where } from 'firebase/firestore';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlertTriangle, BarChart3, CheckCircle2, Edit3, FileText, Filter, Mic, Plus, Save, Search, Sparkles, Trash2, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, CheckSquare, Edit3, FileText, Filter, Mic, Plus, Save, Search, Sparkles, Square, Trash2, TrendingUp, X } from 'lucide-react';
 import { db } from '../firebase';
-import { getCategoriasFiltradas, getSubcategorias, normalizar, TIPOS_DESTINO } from '../utils/expenseUtils';
+import { dateInputToDate, dateToInputValue, getCategoriasFiltradas, getSubcategorias, normalizar, TIPOS_DESTINO } from '../utils/expenseUtils';
 
 const currentMonth = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const previousMonth = (monthValue) => {
+  const [year, month] = monthValue.split('-').map(Number);
+  const date = new Date(year, month - 2, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
 
 const currentWeek = () => {
@@ -18,13 +24,13 @@ const currentWeek = () => {
 };
 
 const expenseMonth = (gasto) => {
-  const date = gasto.fecha?.toDate?.();
+  const date = gasto.fecha?.toDate?.() || (gasto.fecha instanceof Date ? gasto.fecha : null);
   if (!date) return '';
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
 
 const expenseWeek = (gasto) => {
-  const date = gasto.fecha?.toDate?.();
+  const date = gasto.fecha?.toDate?.() || (gasto.fecha instanceof Date ? gasto.fecha : null);
   if (!date) return '';
   const first = new Date(date.getFullYear(), 0, 1);
   const days = Math.floor((date - first) / 86400000);
@@ -32,8 +38,9 @@ const expenseWeek = (gasto) => {
 };
 
 const formatDate = (fecha) => {
-  if (fecha?.toDate) {
-    return fecha.toDate().toLocaleDateString('es-UY', { day: '2-digit', month: 'short' });
+  const date = fecha?.toDate?.() || (fecha instanceof Date ? fecha : null);
+  if (date) {
+    return date.toLocaleDateString('es-UY', { day: '2-digit', month: 'short' });
   }
   return 'Sin fecha';
 };
@@ -54,19 +61,22 @@ export default function Home({ user, onAddExpense }) {
   const [categorias, setCategorias] = useState([]);
   const [categoriasUsuario, setCategoriasUsuario] = useState([]);
   const [editando, setEditando] = useState(null);
-  const [form, setForm] = useState({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '', vehiculoId: '', hogarId: '', tarjetaId: '' });
+  const [form, setForm] = useState({ monto: '', moneda: 'UYU', fecha: '', comentario: '', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '', vehiculoId: '', hogarId: '', tarjetaId: '' });
   const [showNuevaCategoria, setShowNuevaCategoria] = useState(false);
   const [showNuevaSubcategoria, setShowNuevaSubcategoria] = useState(false);
   const [nuevaCategoria, setNuevaCategoria] = useState('');
   const [nuevaSubcategoria, setNuevaSubcategoria] = useState('');
   const [showCharts, setShowCharts] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState({});
   const [filters, setFilters] = useState({
     periodo: 'mes',
     mes: currentMonth(),
     moneda: 'todas',
     tipoDestino: 'todos',
     estadoRevision: 'todos',
+    montoMin: '',
     texto: '',
   });
   const mesActual = currentMonth();
@@ -140,10 +150,11 @@ export default function Home({ user, onAddExpense }) {
       .filter(gasto => filters.moneda === 'todas' || (gasto.moneda || 'UYU') === filters.moneda)
       .filter(gasto => filters.tipoDestino === 'todos' || (gasto.tipoDestino || 'general') === filters.tipoDestino)
       .filter(gasto => filters.estadoRevision === 'todos' || (gasto.estadoRevision || 'confirmado') === filters.estadoRevision)
+      .filter(gasto => !filters.montoMin || Number(gasto.monto || 0) >= Number(filters.montoMin))
       .filter(gasto => {
         const texto = filters.texto.trim().toLowerCase();
         if (!texto) return true;
-        return `${gasto.categoriaGrupo || ''} ${gasto.subcategoria || ''} ${gasto.categoria || ''} ${gasto.detalles?.descripcion || ''}`.toLowerCase().includes(texto);
+        return `${gasto.categoriaGrupo || ''} ${gasto.subcategoria || ''} ${gasto.categoria || ''} ${gasto.detalles?.descripcion || ''} ${gasto.detalles?.comentario || ''}`.toLowerCase().includes(texto);
       })
       .sort((a, b) => (b.fecha?.seconds || 0) - (a.fecha?.seconds || 0))
   ), [filters, gastos, semanaActual]);
@@ -151,6 +162,12 @@ export default function Home({ user, onAddExpense }) {
   const gastosMes = useMemo(() => (
     gastos.filter(gasto => expenseMonth(gasto) === mesActual)
   ), [gastos, mesActual]);
+
+  const mesAnteriorFiltro = useMemo(() => previousMonth(filters.mes), [filters.mes]);
+
+  const gastosMesAnterior = useMemo(() => (
+    gastos.filter(gasto => expenseMonth(gasto) === mesAnteriorFiltro)
+  ), [gastos, mesAnteriorFiltro]);
 
   const totalUyu = useMemo(() => (
     gastosPeriodo
@@ -163,6 +180,14 @@ export default function Home({ user, onAddExpense }) {
       .filter(gasto => gasto.moneda === 'USD')
       .reduce((total, gasto) => total + Number(gasto.monto || 0), 0)
   ), [gastosPeriodo]);
+
+  const totalMesAnteriorUyu = useMemo(() => (
+    gastosMesAnterior
+      .filter(gasto => (gasto.moneda || 'UYU') === 'UYU')
+      .reduce((total, gasto) => total + Number(gasto.monto || 0), 0)
+  ), [gastosMesAnterior]);
+
+  const variacionMes = totalMesAnteriorUyu > 0 ? ((totalUyu - totalMesAnteriorUyu) / totalMesAnteriorUyu) * 100 : 0;
 
   const pendientesRevision = useMemo(() => (
     gastosMes.filter(gasto => gasto.estadoRevision === 'pendiente_revision').length
@@ -186,6 +211,47 @@ export default function Home({ user, onAddExpense }) {
       }))
       .sort((a, b) => b.total - a.total)
       .slice(0, 5);
+  }, [gastosPeriodo]);
+
+  const categoriaMesAnterior = useMemo(() => {
+    const grupos = new Map();
+    gastosMesAnterior.filter(gasto => (gasto.moneda || 'UYU') === 'UYU').forEach((gasto) => {
+      const key = gasto.categoriaGrupo || gasto.categoria || 'Sin categoría';
+      grupos.set(key, (grupos.get(key) || 0) + Number(gasto.monto || 0));
+    });
+    return grupos;
+  }, [gastosMesAnterior]);
+
+  const cambiosCategoria = useMemo(() => (
+    porCategoria
+      .map(item => {
+        const anterior = categoriaMesAnterior.get(item.categoria) || 0;
+        const diff = item.total - anterior;
+        return { ...item, anterior, diff, pct: anterior > 0 ? (diff / anterior) * 100 : null };
+      })
+      .filter(item => Math.abs(item.diff) > 0)
+      .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))
+      .slice(0, 3)
+  ), [categoriaMesAnterior, porCategoria]);
+
+  const gastosRaros = useMemo(() => {
+    const confirmadosUyu = gastosPeriodo.filter(gasto => (gasto.moneda || 'UYU') === 'UYU');
+    const promedio = confirmadosUyu.reduce((total, gasto) => total + Number(gasto.monto || 0), 0) / Math.max(confirmadosUyu.length, 1);
+    return confirmadosUyu
+      .filter(gasto => Number(gasto.monto || 0) >= Math.max(promedio * 2.2, 2500))
+      .sort((a, b) => Number(b.monto || 0) - Number(a.monto || 0))
+      .slice(0, 5);
+  }, [gastosPeriodo]);
+
+  const timeline = useMemo(() => {
+    const grupos = new Map();
+    gastosPeriodo.filter(gasto => (gasto.moneda || 'UYU') === 'UYU').forEach((gasto) => {
+      const date = gasto.fecha?.toDate?.();
+      if (!date) return;
+      const key = date.toLocaleDateString('es-UY', { day: '2-digit', month: 'short' });
+      grupos.set(key, (grupos.get(key) || 0) + Number(gasto.monto || 0));
+    });
+    return [...grupos.entries()].slice(-10);
   }, [gastosPeriodo]);
 
   const chartData = porCategoria.map(item => ({ categoria: item.categoria, total: item.total }));
@@ -242,6 +308,15 @@ export default function Home({ user, onAddExpense }) {
       .slice(0, 3);
   }, [productoAgregados, productoPrecios]);
 
+  const tarjetaConsumosMes = useMemo(() => {
+    const grupos = new Map();
+    gastosMes.forEach((gasto) => {
+      if (!gasto.tarjetaId || (gasto.moneda || 'UYU') !== 'UYU') return;
+      grupos.set(gasto.tarjetaId, (grupos.get(gasto.tarjetaId) || 0) + Number(gasto.monto || 0));
+    });
+    return grupos;
+  }, [gastosMes]);
+
   const alertas = useMemo(() => {
     const resultado = [];
     const pendientes = gastosMes.filter(gasto => gasto.estadoRevision === 'pendiente_revision').length;
@@ -285,6 +360,15 @@ export default function Home({ user, onAddExpense }) {
       if (dia >= hoy && dia - hoy <= 5) {
         resultado.push({ tipo: 'vencimiento', titulo: `${tarjeta.nombre || tarjeta.marca} vence pronto`, texto: `Vencimiento día ${dia}.` });
       }
+      const cierre = Number(tarjeta.diaCierre || 0);
+      const consumos = tarjetaConsumosMes.get(tarjeta.id) || 0;
+      if (cierre >= hoy && cierre - hoy <= 5 && consumos > 0) {
+        resultado.push({
+          tipo: 'tarjeta',
+          titulo: `${tarjeta.nombre || tarjeta.marca} cierra pronto`,
+          texto: `Consumos cargados este mes: $${consumos.toLocaleString('es-UY', { maximumFractionDigits: 0 })}.`,
+        });
+      }
     });
 
     productoInsights.forEach((insight) => {
@@ -296,10 +380,68 @@ export default function Home({ user, onAddExpense }) {
     });
 
     return resultado.slice(0, 6);
-  }, [gastos, gastosMes, hogares, presupuestos, productoInsights, semanaActual, tarjetas]);
+  }, [gastos, gastosMes, hogares, presupuestos, productoInsights, semanaActual, tarjetaConsumosMes, tarjetas]);
+
+  const presupuestosActivos = useMemo(() => {
+    const ahora = new Date();
+    const dia = ahora.getDate();
+    const diasMes = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0).getDate();
+    const avanceMes = dia / diasMes;
+
+    return presupuestos.map((presupuesto) => {
+      const base = presupuesto.periodo === 'semanal'
+        ? gastos.filter(gasto => expenseWeek(gasto) === semanaActual)
+        : gastosMes;
+      const gastado = base
+        .filter(gasto => (gasto.moneda || 'UYU') === (presupuesto.moneda || 'UYU'))
+        .filter(gasto => !presupuesto.categoriaGrupo || gasto.categoriaGrupo === presupuesto.categoriaGrupo)
+        .filter(gasto => !presupuesto.subcategoria || gasto.subcategoria === presupuesto.subcategoria)
+        .filter(gasto => !presupuesto.hogarId || gasto.hogarId === presupuesto.hogarId)
+        .reduce((total, gasto) => total + Number(gasto.monto || 0), 0);
+      const limite = Number(presupuesto.monto || 0);
+      const pct = limite > 0 ? (gastado / limite) * 100 : 0;
+      const ritmoEsperado = presupuesto.periodo === 'mensual' && avanceMes > 0 ? (pct / (avanceMes * 100)) : 1;
+      const proyeccion = presupuesto.periodo === 'mensual' && avanceMes > 0 ? gastado / avanceMes : gastado;
+      return { ...presupuesto, gastado, limite, pct, ritmoEsperado, proyeccion };
+    }).filter(item => item.limite > 0);
+  }, [gastos, gastosMes, presupuestos, semanaActual]);
+
+  const cierreMes = useMemo(() => {
+    const sinCategoria = gastosMes.filter(gasto => !gasto.categoriaGrupo || gasto.categoriaGrupo === 'Sin categoría').length;
+    const pendientes = gastosMes.filter(gasto => gasto.estadoRevision === 'pendiente_revision').length;
+    const duplicados = gastosMes.filter(gasto => gasto.posibleDuplicado).length;
+    const presupuestosPasados = presupuestosActivos.filter(item => item.pct >= 100).length;
+    return [
+      { label: 'Gastos pendientes de revisar', count: pendientes, ok: pendientes === 0 },
+      { label: 'Gastos sin categoría clara', count: sinCategoria, ok: sinCategoria === 0 },
+      { label: 'Posibles duplicados', count: duplicados, ok: duplicados === 0 },
+      { label: 'Presupuestos excedidos', count: presupuestosPasados, ok: presupuestosPasados === 0 },
+    ];
+  }, [gastosMes, presupuestosActivos]);
+
+  const selectedGastos = useMemo(() => (
+    gastosPeriodo.filter(gasto => selectedIds[gasto.id])
+  ), [gastosPeriodo, selectedIds]);
 
   const confirmarGasto = async (gastoId) => {
     await updateDoc(doc(db, 'gastos', gastoId), { estadoRevision: 'confirmado' });
+  };
+
+  const toggleSelected = (gastoId) => {
+    setSelectedIds((actual) => ({ ...actual, [gastoId]: !actual[gastoId] }));
+  };
+
+  const confirmarSeleccionados = async () => {
+    await Promise.all(selectedGastos.map(gasto => updateDoc(doc(db, 'gastos', gasto.id), { estadoRevision: 'confirmado' })));
+    setSelectedIds({});
+    setSelectionMode(false);
+  };
+
+  const eliminarSeleccionados = async () => {
+    if (!window.confirm(`¿Eliminar ${selectedGastos.length} gastos seleccionados?`)) return;
+    await Promise.all(selectedGastos.map(gasto => deleteDoc(doc(db, 'gastos', gasto.id))));
+    setSelectedIds({});
+    setSelectionMode(false);
   };
 
   const empezarEdicion = (gasto) => {
@@ -307,6 +449,8 @@ export default function Home({ user, onAddExpense }) {
     setForm({
       monto: gasto.monto || '',
       moneda: gasto.moneda || 'UYU',
+      fecha: dateToInputValue(gasto.fecha),
+      comentario: gasto.detalles?.comentario || '',
       tipoDestino: gasto.tipoDestino || 'general',
       categoriaId: gasto.categoriaId || '',
       categoria: gasto.categoriaGrupo || '',
@@ -319,7 +463,7 @@ export default function Home({ user, onAddExpense }) {
 
   const cancelarEdicion = () => {
     setEditando(null);
-    setForm({ monto: '', moneda: 'UYU', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '', vehiculoId: '', hogarId: '', tarjetaId: '' });
+    setForm({ monto: '', moneda: 'UYU', fecha: '', comentario: '', tipoDestino: 'general', categoriaId: '', categoria: '', subcategoria: '', vehiculoId: '', hogarId: '', tarjetaId: '' });
     setShowNuevaCategoria(false);
     setShowNuevaSubcategoria(false);
     setNuevaCategoria('');
@@ -402,6 +546,7 @@ export default function Home({ user, onAddExpense }) {
     await updateDoc(doc(db, 'gastos', gasto.id), {
       monto: Number(form.monto),
       moneda: form.moneda,
+      fecha: Timestamp.fromDate(dateInputToDate(form.fecha)),
       tipoDestino: form.tipoDestino,
       categoriaId: categoria?.id || form.categoriaId || null,
       categoriaGrupo: categoriaNombre,
@@ -413,6 +558,10 @@ export default function Home({ user, onAddExpense }) {
       hogarNombre: form.tipoDestino === 'hogar' && hogar ? hogar.nombre : null,
       tarjetaId: form.tipoDestino === 'tarjeta' && form.tarjetaId ? form.tarjetaId : null,
       tarjetaNombre: form.tipoDestino === 'tarjeta' && tarjeta ? tarjeta.nombre || `${tarjeta.banco || ''} ${tarjeta.marca || ''}`.trim() : null,
+      detalles: {
+        ...(gasto.detalles || {}),
+        comentario: form.comentario.trim(),
+      },
       estadoRevision: 'confirmado',
     });
     cancelarEdicion();
@@ -422,6 +571,18 @@ export default function Home({ user, onAddExpense }) {
     if (window.confirm('¿Eliminar este gasto?')) {
       await deleteDoc(doc(db, 'gastos', gasto.id));
     }
+  };
+
+  const repetirGasto = async (gasto) => {
+    const { id, createdAt, importBatchId, importSourceType, duplicateKey, posibleDuplicado, ...data } = gasto;
+    await addDoc(collection(db, 'gastos'), {
+      ...data,
+      userId: user.uid,
+      fecha: Timestamp.fromDate(new Date()),
+      createdAt: serverTimestamp(),
+      origen: 'repetido',
+      estadoRevision: 'confirmado',
+    });
   };
 
   return (
@@ -505,10 +666,17 @@ export default function Home({ user, onAddExpense }) {
               <option value="confirmado">Confirmados</option>
               <option value="pendiente_revision">Pendientes</option>
             </select>
+            <input
+              type="number"
+              value={filters.montoMin}
+              onChange={(e) => setFilters((actual) => ({ ...actual, montoMin: e.target.value }))}
+              placeholder="Mínimo"
+              className="p-3 rounded-2xl bg-zinc-50 border border-zinc-100 text-sm font-bold outline-none"
+            />
           </div>
         )}
-        {pendientesRevision > 0 && (
-          <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
+          {pendientesRevision > 0 && (
             <button
               type="button"
               onClick={() => setFilters((actual) => ({ ...actual, estadoRevision: actual.estadoRevision === 'pendiente_revision' ? 'todos' : 'pendiente_revision' }))}
@@ -516,17 +684,142 @@ export default function Home({ user, onAddExpense }) {
             >
               {pendientesRevision} pendiente{pendientesRevision > 1 ? 's' : ''} de revisar
             </button>
-            {filters.estadoRevision === 'pendiente_revision' && (
-              <button
-                type="button"
-                onClick={() => setFilters((actual) => ({ ...actual, estadoRevision: 'todos' }))}
-                className="px-3 py-2 rounded-full bg-zinc-100 text-zinc-500 text-xs font-black"
-              >
-                Ver todos
-              </button>
-            )}
+          )}
+          <button
+            type="button"
+            onClick={() => setFilters((actual) => ({ ...actual, montoMin: actual.montoMin ? '' : '2500' }))}
+            className={`px-3 py-2 rounded-full text-xs font-black ${filters.montoMin ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-500'}`}
+          >
+            Gastos grandes
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectionMode((actual) => !actual);
+              setSelectedIds({});
+            }}
+            className={`px-3 py-2 rounded-full text-xs font-black ${selectionMode ? 'bg-emerald-500 text-white' : 'bg-zinc-100 text-zinc-500'}`}
+          >
+            Seleccionar
+          </button>
+          {(filters.estadoRevision === 'pendiente_revision' || filters.montoMin) && (
+            <button
+              type="button"
+              onClick={() => setFilters((actual) => ({ ...actual, estadoRevision: 'todos', montoMin: '' }))}
+              className="px-3 py-2 rounded-full bg-zinc-100 text-zinc-500 text-xs font-black"
+            >
+              Ver todos
+            </button>
+          )}
+        </div>
+      </section>
+
+      {(totalMesAnteriorUyu > 0 || cambiosCategoria.length > 0 || gastosRaros.length > 0) && (
+        <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm space-y-4">
+          <div className="flex items-center gap-2">
+            <TrendingUp size={18} className="text-emerald-600" />
+            <h2 className="font-black text-zinc-900">Qué cambió</h2>
           </div>
-        )}
+          {totalMesAnteriorUyu > 0 && (
+            <div className="rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
+              <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Contra el mes anterior</p>
+              <p className={`mt-1 text-lg font-black ${variacionMes > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                {variacionMes > 0 ? '+' : ''}{variacionMes.toFixed(0)}%
+              </p>
+              <p className="text-xs font-medium text-zinc-500">
+                Antes: ${totalMesAnteriorUyu.toLocaleString('es-UY', { maximumFractionDigits: 0 })}
+              </p>
+            </div>
+          )}
+          {cambiosCategoria.length > 0 && (
+            <div className="space-y-2">
+              {cambiosCategoria.map(item => (
+                <div key={item.categoria} className="rounded-2xl bg-zinc-50 border border-zinc-100 p-3">
+                  <p className="font-black text-sm text-zinc-900">{item.categoria}</p>
+                  <p className={`text-xs font-bold ${item.diff > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                    {item.diff > 0 ? 'Subió' : 'Bajó'} ${Math.abs(item.diff).toLocaleString('es-UY', { maximumFractionDigits: 0 })}
+                    {item.pct !== null ? ` (${item.pct > 0 ? '+' : ''}${item.pct.toFixed(0)}%)` : ''}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+          {gastosRaros.length > 0 && (
+            <div className="rounded-2xl bg-amber-50 border border-amber-100 p-3">
+              <p className="text-xs font-black uppercase tracking-wider text-amber-700">Gastos raros del mes</p>
+              <div className="mt-2 space-y-1">
+                {gastosRaros.slice(0, 3).map(gasto => (
+                  <p key={gasto.id} className="text-xs font-bold text-amber-900">
+                    {gasto.subcategoria || gasto.categoria || 'Gasto'} · {formatMoney(gasto)}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {presupuestosActivos.length > 0 && (
+        <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
+          <h2 className="font-black text-zinc-900">Presupuestos</h2>
+          <div className="mt-4 space-y-3">
+            {presupuestosActivos.slice(0, 4).map(presupuesto => (
+              <div key={presupuesto.id}>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-bold text-zinc-700 truncate">{presupuesto.nombre}</span>
+                  <span className={`font-black ${presupuesto.pct >= 100 ? 'text-red-500' : presupuesto.ritmoEsperado > 1.15 ? 'text-amber-600' : 'text-zinc-900'}`}>
+                    {presupuesto.pct.toFixed(0)}%
+                  </span>
+                </div>
+                <div className="mt-2 h-2 rounded-full bg-zinc-100 overflow-hidden">
+                  <div className={`h-full rounded-full ${presupuesto.pct >= 100 ? 'bg-red-500' : presupuesto.ritmoEsperado > 1.15 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(100, presupuesto.pct)}%` }} />
+                </div>
+                {presupuesto.ritmoEsperado > 1.15 && presupuesto.periodo === 'mensual' && (
+                  <p className="mt-1 text-xs font-bold text-amber-600">Vas más rápido que el avance del mes.</p>
+                )}
+                {presupuesto.periodo === 'mensual' && presupuesto.proyeccion > presupuesto.limite && (
+                  <p className="mt-1 text-xs font-bold text-red-500">
+                    Si sigue igual: {presupuesto.moneda === 'USD' ? 'US$' : '$'}{presupuesto.proyeccion.toLocaleString('es-UY', { maximumFractionDigits: 0 })}.
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {timeline.length > 0 && (
+        <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <CalendarDays size={18} className="text-zinc-700" />
+            <h2 className="font-black text-zinc-900">Ritmo diario</h2>
+          </div>
+          <div className="space-y-2">
+            {timeline.map(([dia, total]) => (
+              <div key={dia} className="grid grid-cols-[52px_1fr_auto] items-center gap-2 text-xs">
+                <span className="font-bold text-zinc-400">{dia}</span>
+                <div className="h-2 rounded-full bg-zinc-100 overflow-hidden">
+                  <div className="h-full rounded-full bg-zinc-900" style={{ width: `${Math.min(100, (total / Math.max(totalUyu, 1)) * 100)}%` }} />
+                </div>
+                <span className="font-black text-zinc-800">${total.toLocaleString('es-UY', { maximumFractionDigits: 0 })}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
+        <h2 className="font-black text-zinc-900">Cierre de mes</h2>
+        <div className="mt-3 space-y-2">
+          {cierreMes.map(item => (
+            <div key={item.label} className="flex items-center justify-between rounded-2xl bg-zinc-50 border border-zinc-100 p-3">
+              <span className="text-sm font-bold text-zinc-700">{item.label}</span>
+              <span className={`text-xs font-black px-2 py-1 rounded-full ${item.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                {item.ok ? 'OK' : item.count}
+              </span>
+            </div>
+          ))}
+        </div>
       </section>
 
       {porCategoria.length > 0 && (
@@ -593,6 +886,35 @@ export default function Home({ user, onAddExpense }) {
         </section>
       )}
 
+      {productoInsights.length > 0 && (
+        <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles size={18} className="text-indigo-600" />
+            <h2 className="font-black text-zinc-900">Supermercado</h2>
+          </div>
+          <div className="space-y-2">
+            {productoInsights.map((insight) => (
+              <div key={insight.id} className="rounded-2xl bg-zinc-50 border border-zinc-100 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-black text-sm text-zinc-900 truncate">{insight.nombre}</p>
+                    <p className="text-xs font-bold text-zinc-500">
+                      {insight.scope === 'comercio' ? `Comparado en ${insight.comercio}` : `${insight.muestras} muestras anónimas`}
+                    </p>
+                  </div>
+                  <span className={`px-2 py-1 rounded-full text-[11px] font-black ${insight.diff > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-700'}`}>
+                    {insight.diff > 0 ? '+' : ''}{insight.diff.toFixed(0)}%
+                  </span>
+                </div>
+                <p className="mt-2 text-xs font-bold text-zinc-500">
+                  Tu precio: {insight.moneda === 'USD' ? 'US$' : '$'}{insight.precio.toFixed(0)} · Promedio: {insight.moneda === 'USD' ? 'US$' : '$'}{insight.promedio.toFixed(0)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="space-y-3">
         <div className="flex items-end justify-between">
           <div>
@@ -600,6 +922,18 @@ export default function Home({ user, onAddExpense }) {
             <p className="text-sm font-medium text-zinc-500">{gastosPeriodo.length} registros</p>
           </div>
         </div>
+
+        {selectionMode && (
+          <div className="sticky top-2 z-10 rounded-[2rem] bg-zinc-900 text-white p-3 shadow-xl flex items-center gap-2">
+            <p className="flex-1 text-sm font-black">{selectedGastos.length} seleccionado{selectedGastos.length === 1 ? '' : 's'}</p>
+            <button type="button" onClick={confirmarSeleccionados} disabled={selectedGastos.length === 0} className="px-3 py-2 rounded-xl bg-emerald-500 text-xs font-black disabled:opacity-40">
+              Confirmar
+            </button>
+            <button type="button" onClick={eliminarSeleccionados} disabled={selectedGastos.length === 0} className="px-3 py-2 rounded-xl bg-red-500 text-xs font-black disabled:opacity-40">
+              Eliminar
+            </button>
+          </div>
+        )}
 
         {gastosPeriodo.length === 0 && (
           <div className="rounded-[2rem] bg-white border border-zinc-100 p-8 text-center">
@@ -620,6 +954,12 @@ export default function Home({ user, onAddExpense }) {
                     <option value="USD">Dólares</option>
                   </select>
                 </div>
+                <input
+                  type="date"
+                  value={form.fecha}
+                  onChange={e => setForm({ ...form, fecha: e.target.value })}
+                  className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold"
+                />
                 <select value={form.tipoDestino} onChange={e => setForm({ ...form, tipoDestino: e.target.value, categoriaId: '', categoria: '', subcategoria: '', vehiculoId: '', hogarId: '', tarjetaId: '' })} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none font-bold">
                   {TIPOS_DESTINO.map(tipo => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
                 </select>
@@ -701,6 +1041,13 @@ export default function Home({ user, onAddExpense }) {
                     {tarjetas.map(tarjeta => <option key={tarjeta.id} value={tarjeta.id}>{tarjeta.nombre || `${tarjeta.banco || ''} ${tarjeta.marca || ''}`.trim()}</option>)}
                   </select>
                 )}
+                <textarea
+                  value={form.comentario}
+                  onChange={e => setForm({ ...form, comentario: e.target.value })}
+                  className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none resize-none"
+                  rows={2}
+                  placeholder="Comentario opcional"
+                />
                 <div className="flex gap-2">
                   <button onClick={() => guardarEdicion(gasto)} className="flex-1 p-3 rounded-2xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2"><Save size={18} /> Guardar</button>
                   <button onClick={cancelarEdicion} className="p-3 rounded-2xl bg-zinc-100 text-zinc-500"><X size={18} /></button>
@@ -708,6 +1055,15 @@ export default function Home({ user, onAddExpense }) {
               </div>
             ) : (
               <div className="flex items-start justify-between gap-3">
+                {selectionMode && (
+                  <button
+                    type="button"
+                    onClick={() => toggleSelected(gasto.id)}
+                    className={`mt-1 shrink-0 ${selectedIds[gasto.id] ? 'text-emerald-500' : 'text-zinc-300'}`}
+                  >
+                    {selectedIds[gasto.id] ? <CheckSquare size={20} /> : <Square size={20} />}
+                  </button>
+                )}
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="font-black text-zinc-900 truncate">{gasto.subcategoria || gasto.categoria || 'Gasto'}</p>
@@ -720,6 +1076,9 @@ export default function Home({ user, onAddExpense }) {
                   </p>
                   {(gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre) && (
                     <p className="mt-1 text-xs font-black text-emerald-600 truncate">{gasto.vehiculoNombre || gasto.hogarNombre || gasto.tarjetaNombre}</p>
+                  )}
+                  {gasto.detalles?.comentario && (
+                    <p className="mt-2 text-xs font-medium text-zinc-400 line-clamp-2">{gasto.detalles.comentario}</p>
                   )}
                 </div>
                 <div className="text-right shrink-0">
@@ -735,6 +1094,7 @@ export default function Home({ user, onAddExpense }) {
                         <CheckCircle2 size={14} /> OK
                       </button>
                     )}
+                    <button type="button" onClick={() => repetirGasto(gasto)} className="p-2 rounded-full bg-emerald-50 text-emerald-600"><Plus size={15} /></button>
                     <button type="button" onClick={() => empezarEdicion(gasto)} className="p-2 rounded-full bg-zinc-50 text-zinc-500"><Edit3 size={15} /></button>
                     <button type="button" onClick={() => eliminarGasto(gasto)} className="p-2 rounded-full bg-red-50 text-red-500"><Trash2 size={15} /></button>
                   </div>

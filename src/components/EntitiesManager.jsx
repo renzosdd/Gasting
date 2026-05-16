@@ -2,15 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { db, storage } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { CarFront, CreditCard, Edit3, Home, Image as ImageIcon, Mail, MapPin, Phone, Plus, Save, Target, Trash2, UserRound, Users, X } from 'lucide-react';
-import { getSubcategoriaNombre } from '../utils/expenseUtils';
+import { CarFront, CreditCard, Edit3, Home, Image as ImageIcon, Mail, MapPin, Phone, Plus, Save, Sparkles, Target, Trash2, UserRound, Users, X } from 'lucide-react';
+import { getSubcategoriaNombre, normalizar } from '../utils/expenseUtils';
 
 const EMPTY_VEHICULO = { nombre: '', marca: '', modelo: '', anio: '', tipo_motor: 'Nafta', kilometraje_actual: '', fotoUrl: '' };
 const EMPTY_HOGAR = { nombre: '', direccion: '', fotoUrl: '', servicios: [], miembrosEmails: '' };
 const EMPTY_TARJETA = { nombre: '', banco: '', marca: 'Visa', ultimos4: '', diaCierre: '', diaVencimiento: '' };
 const EMPTY_SERVICIO = { nombre: '', numeroCuenta: '', diaPago: '', proveedor: '' };
 const EMPTY_PRESUPUESTO = { nombre: '', monto: '', moneda: 'UYU', hogarId: '', categoriaGrupo: '', subcategoria: '', periodo: 'mensual' };
-const EMPTY_PERFIL = { nombre: '', telefono: '', monedaPrincipal: 'UYU' };
+const EMPTY_PERFIL = { nombre: '', telefono: '', fechaNacimiento: '', pais: '', ciudad: '', ocupacion: '', monedaPrincipal: 'UYU' };
+const EMPTY_REGLA = { patron: '', tipoDestino: 'general', categoriaGrupo: '', subcategoria: '', prioridad: 10 };
 
 const compressImage = (file, maxSize = 900, quality = 0.72) => new Promise((resolve, reject) => {
   const image = new Image();
@@ -47,6 +48,7 @@ export default function EntitiesManager({ user }) {
   const [hogares, setHogares] = useState([]);
   const [tarjetas, setTarjetas] = useState([]);
   const [categorias, setCategorias] = useState([]);
+  const [reglas, setReglas] = useState([]);
   const [presupuestos, setPresupuestos] = useState([]);
   const [editandoId, setEditandoId] = useState(null);
   const [formVehiculo, setFormVehiculo] = useState(EMPTY_VEHICULO);
@@ -56,6 +58,8 @@ export default function EntitiesManager({ user }) {
   const [fotoHogarFile, setFotoHogarFile] = useState(null);
   const [servicioForm, setServicioForm] = useState(EMPTY_SERVICIO);
   const [formPresupuesto, setFormPresupuesto] = useState(EMPTY_PRESUPUESTO);
+  const [formRegla, setFormRegla] = useState(EMPTY_REGLA);
+  const [editandoReglaId, setEditandoReglaId] = useState(null);
   const [showServicioForm, setShowServicioForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [perfilLoading, setPerfilLoading] = useState(false);
@@ -66,6 +70,10 @@ export default function EntitiesManager({ user }) {
       setPerfil({
         nombre: data.nombre || user.displayName || '',
         telefono: data.telefono || '',
+        fechaNacimiento: data.fechaNacimiento || '',
+        pais: data.pais || '',
+        ciudad: data.ciudad || '',
+        ocupacion: data.ocupacion || '',
         monedaPrincipal: data.monedaPrincipal || 'UYU',
       });
     });
@@ -76,6 +84,7 @@ export default function EntitiesManager({ user }) {
       : null;
     const tarjetasQuery = query(collection(db, 'tarjetas'), where('propietarios', 'array-contains', user.uid));
     const presupuestosQuery = query(collection(db, 'presupuestos'), where('miembros', 'array-contains', user.uid));
+    const reglasQuery = query(collection(db, 'reglas_categorizacion'), where('userId', '==', user.uid));
 
     const unsubVehiculos = onSnapshot(vehiculosQuery, (snapshot) => {
       setVehiculos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -95,11 +104,14 @@ export default function EntitiesManager({ user }) {
     const unsubPresupuestos = onSnapshot(presupuestosQuery, (snapshot) => {
       setPresupuestos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
+    const unsubReglas = onSnapshot(reglasQuery, (snapshot) => {
+      setReglas(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
     const unsubCategorias = onSnapshot(collection(db, 'categorias'), (snapshot) => {
       setCategorias(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    return () => { unsubPerfil(); unsubVehiculos(); unsubHogares(); unsubHogaresCompartidos(); unsubTarjetas(); unsubPresupuestos(); unsubCategorias(); };
+    return () => { unsubPerfil(); unsubVehiculos(); unsubHogares(); unsubHogaresCompartidos(); unsubTarjetas(); unsubPresupuestos(); unsubReglas(); unsubCategorias(); };
   }, [user.displayName, user.email, user.uid]);
 
   const categoriasActivas = useMemo(() => (
@@ -113,6 +125,15 @@ export default function EntitiesManager({ user }) {
     return Array.isArray(categoria?.subcategorias) ? categoria.subcategorias.map(getSubcategoriaNombre).filter(Boolean) : [];
   }, [categoriasActivas, formPresupuesto.categoriaGrupo]);
 
+  const categoriasRegla = useMemo(() => (
+    categoriasActivas.filter(item => (item.tipoDestino || 'general') === formRegla.tipoDestino)
+  ), [categoriasActivas, formRegla.tipoDestino]);
+
+  const subcategoriasRegla = useMemo(() => {
+    const categoria = categoriasRegla.find(item => item.nombre === formRegla.categoriaGrupo);
+    return Array.isArray(categoria?.subcategorias) ? categoria.subcategorias.map(getSubcategoriaNombre).filter(Boolean) : [];
+  }, [categoriasRegla, formRegla.categoriaGrupo]);
+
   const reset = () => {
     setEditandoId(null);
     setFormVehiculo(EMPTY_VEHICULO);
@@ -123,6 +144,8 @@ export default function EntitiesManager({ user }) {
     setFotoHogarFile(null);
     setServicioForm(EMPTY_SERVICIO);
     setShowServicioForm(false);
+    setFormRegla(EMPTY_REGLA);
+    setEditandoReglaId(null);
   };
 
   const cambiarTab = (nuevoTab) => {
@@ -293,6 +316,49 @@ export default function EntitiesManager({ user }) {
     }
   };
 
+  const guardarRegla = async (e) => {
+    e.preventDefault();
+    const patron = formRegla.patron.trim();
+    if (!patron || !formRegla.categoriaGrupo) return;
+
+    const payload = {
+      userId: user.uid,
+      patron,
+      patronNormalizado: normalizar(patron),
+      tipoDestino: formRegla.tipoDestino || 'general',
+      categoriaGrupo: formRegla.categoriaGrupo,
+      subcategoria: formRegla.subcategoria || '',
+      prioridad: Number(formRegla.prioridad || 10),
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      if (editandoReglaId) await updateDoc(doc(db, 'reglas_categorizacion', editandoReglaId), payload);
+      else await addDoc(collection(db, 'reglas_categorizacion'), { ...payload, createdAt: serverTimestamp() });
+      setFormRegla(EMPTY_REGLA);
+      setEditandoReglaId(null);
+    } catch (error) {
+      alert('Error al guardar regla: ' + error.message);
+    }
+  };
+
+  const editarRegla = (regla) => {
+    setEditandoReglaId(regla.id);
+    setFormRegla({
+      patron: regla.patron || '',
+      tipoDestino: regla.tipoDestino || 'general',
+      categoriaGrupo: regla.categoriaGrupo || '',
+      subcategoria: regla.subcategoria || '',
+      prioridad: regla.prioridad || 10,
+    });
+  };
+
+  const eliminarRegla = async (reglaId) => {
+    if (window.confirm('¿Eliminar esta regla?')) {
+      await deleteDoc(doc(db, 'reglas_categorizacion', reglaId));
+    }
+  };
+
   const guardarPerfil = async (e) => {
     e.preventDefault();
     setPerfilLoading(true);
@@ -301,6 +367,10 @@ export default function EntitiesManager({ user }) {
         nombre: perfil.nombre.trim(),
         email: user.email || '',
         telefono: perfil.telefono.trim(),
+        fechaNacimiento: perfil.fechaNacimiento || '',
+        pais: perfil.pais.trim(),
+        ciudad: perfil.ciudad.trim(),
+        ocupacion: perfil.ocupacion.trim(),
         monedaPrincipal: perfil.monedaPrincipal,
         updatedAt: serverTimestamp(),
       }, { merge: true });
@@ -363,8 +433,8 @@ export default function EntitiesManager({ user }) {
             <p className="mt-1 font-black">{perfil.monedaPrincipal}</p>
           </div>
           <div className="rounded-2xl bg-white/10 border border-white/10 p-3">
-            <p className="text-zinc-400 font-bold text-xs uppercase tracking-wider">Teléfono</p>
-            <p className="mt-1 font-black truncate">{perfil.telefono || 'Sin cargar'}</p>
+            <p className="text-zinc-400 font-bold text-xs uppercase tracking-wider">Nacimiento</p>
+            <p className="mt-1 font-black truncate">{perfil.fechaNacimiento || 'Sin cargar'}</p>
           </div>
         </div>
 
@@ -379,6 +449,14 @@ export default function EntitiesManager({ user }) {
                 <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" />
                 <input value={perfil.telefono} onChange={e => setPerfil({ ...perfil, telefono: e.target.value })} placeholder="Teléfono" className="w-full pl-11 pr-4 py-4 bg-white/10 border border-white/10 rounded-2xl outline-none text-white placeholder:text-zinc-500" />
               </label>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input type="date" value={perfil.fechaNacimiento} onChange={e => setPerfil({ ...perfil, fechaNacimiento: e.target.value })} className="w-full px-4 py-4 bg-white/10 border border-white/10 rounded-2xl outline-none text-white" />
+              <input value={perfil.ocupacion} onChange={e => setPerfil({ ...perfil, ocupacion: e.target.value })} placeholder="Ocupación" className="w-full px-4 py-4 bg-white/10 border border-white/10 rounded-2xl outline-none text-white placeholder:text-zinc-500" />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input value={perfil.pais} onChange={e => setPerfil({ ...perfil, pais: e.target.value })} placeholder="País" className="w-full px-4 py-4 bg-white/10 border border-white/10 rounded-2xl outline-none text-white placeholder:text-zinc-500" />
+              <input value={perfil.ciudad} onChange={e => setPerfil({ ...perfil, ciudad: e.target.value })} placeholder="Ciudad" className="w-full px-4 py-4 bg-white/10 border border-white/10 rounded-2xl outline-none text-white placeholder:text-zinc-500" />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
               <label className="relative">
@@ -397,30 +475,7 @@ export default function EntitiesManager({ user }) {
         )}
       </section>
 
-      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
-          <CarFront size={19} className="text-emerald-600" />
-          <p className="mt-3 text-2xl font-black text-zinc-900">{vehiculos.length}</p>
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Autos</p>
-        </div>
-        <div className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
-          <Home size={19} className="text-blue-600" />
-          <p className="mt-3 text-2xl font-black text-zinc-900">{hogares.length}</p>
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Casas</p>
-        </div>
-        <div className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
-          <CreditCard size={19} className="text-indigo-600" />
-          <p className="mt-3 text-2xl font-black text-zinc-900">{tarjetas.length}</p>
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Tarjetas</p>
-        </div>
-        <div className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm">
-          <Target size={19} className="text-amber-600" />
-          <p className="mt-3 text-2xl font-black text-zinc-900">{presupuestos.length}</p>
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Planes</p>
-        </div>
-      </section>
-
-      <div className="grid grid-cols-4 bg-white p-1 rounded-[2rem] border border-zinc-100 shadow-sm">
+      <div className="grid grid-cols-5 bg-white p-1 rounded-[2rem] border border-zinc-100 shadow-sm">
         <button onClick={() => cambiarTab('vehiculos')} className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-3 rounded-[1.55rem] text-xs sm:text-sm font-black transition-all ${tab === 'vehiculos' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-400'}`}>
           <CarFront size={18} /> Autos
         </button>
@@ -432,6 +487,9 @@ export default function EntitiesManager({ user }) {
         </button>
         <button onClick={() => cambiarTab('presupuestos')} className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-3 rounded-[1.55rem] text-xs sm:text-sm font-black transition-all ${tab === 'presupuestos' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-400'}`}>
           <Target size={18} /> Plan
+        </button>
+        <button onClick={() => cambiarTab('reglas')} className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-3 rounded-[1.55rem] text-xs sm:text-sm font-black transition-all ${tab === 'reglas' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-400'}`}>
+          <Sparkles size={18} /> Reglas
         </button>
       </div>
 
@@ -674,6 +732,104 @@ export default function EntitiesManager({ user }) {
               <button type="submit" disabled={loading} className="w-full p-4 rounded-2xl font-bold text-white bg-indigo-600 disabled:opacity-50">{loading ? 'Guardando...' : 'Guardar'}</button>
             </form>
           )}
+        </div>
+      )}
+
+      {tab === 'reglas' && (
+        <div className="space-y-6">
+          <section className="rounded-[2rem] bg-white border border-zinc-100 p-5 shadow-sm">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center">
+                <Sparkles size={22} />
+              </div>
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-emerald-600">Reglas personales</p>
+                <h3 className="text-lg font-black text-zinc-900">Autocategorizar gastos</h3>
+              </div>
+            </div>
+
+            <form onSubmit={guardarRegla} className="space-y-3">
+              <input
+                value={formRegla.patron}
+                onChange={e => setFormRegla({ ...formRegla, patron: e.target.value })}
+                placeholder="Texto a detectar, ej: devoto, ancap, ute"
+                className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none font-medium"
+              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <select
+                  value={formRegla.tipoDestino}
+                  onChange={e => setFormRegla({ ...formRegla, tipoDestino: e.target.value, categoriaGrupo: '', subcategoria: '' })}
+                  className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none font-bold"
+                >
+                  <option value="general">General</option>
+                  <option value="vehiculo">Vehículo</option>
+                  <option value="hogar">Casa</option>
+                  <option value="tarjeta">Tarjeta</option>
+                </select>
+                <input
+                  type="number"
+                  value={formRegla.prioridad}
+                  onChange={e => setFormRegla({ ...formRegla, prioridad: e.target.value })}
+                  placeholder="Prioridad"
+                  className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none font-bold"
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <select
+                  value={formRegla.categoriaGrupo}
+                  onChange={e => setFormRegla({ ...formRegla, categoriaGrupo: e.target.value, subcategoria: '' })}
+                  className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none font-bold"
+                >
+                  <option value="">Categoría</option>
+                  {categoriasRegla.map(categoria => <option key={categoria.id} value={categoria.nombre}>{categoria.nombre}</option>)}
+                </select>
+                <select
+                  value={formRegla.subcategoria}
+                  onChange={e => setFormRegla({ ...formRegla, subcategoria: e.target.value })}
+                  className="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none font-bold"
+                >
+                  <option value="">Subcategoría opcional</option>
+                  {subcategoriasRegla.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <button type="submit" className="flex-1 p-4 rounded-2xl bg-emerald-500 text-white font-black flex items-center justify-center gap-2">
+                  <Save size={18} /> {editandoReglaId ? 'Actualizar regla' : 'Guardar regla'}
+                </button>
+                {editandoReglaId && (
+                  <button type="button" onClick={() => { setEditandoReglaId(null); setFormRegla(EMPTY_REGLA); }} className="px-4 rounded-2xl bg-zinc-100 text-zinc-500 font-black">
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            </form>
+          </section>
+
+          <div className="space-y-3">
+            {reglas.length === 0 && (
+              <div className="rounded-[2rem] bg-white border border-zinc-100 p-8 text-center shadow-sm">
+                <Sparkles size={28} className="mx-auto text-zinc-300" />
+                <p className="mt-3 font-black text-zinc-800">Sin reglas todavía.</p>
+              </div>
+            )}
+            {[...reglas].sort((a, b) => Number(b.prioridad || 0) - Number(a.prioridad || 0)).map(regla => (
+              <article key={regla.id} className="rounded-3xl bg-white border border-zinc-100 p-4 shadow-sm flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="font-black text-zinc-900 truncate">{regla.patron}</p>
+                  <p className="text-sm font-bold text-zinc-500 truncate">
+                    {regla.tipoDestino || 'general'} · {regla.categoriaGrupo || 'Sin categoría'}{regla.subcategoria ? ` · ${regla.subcategoria}` : ''}
+                  </p>
+                  <p className="text-xs font-bold text-zinc-400">Prioridad {regla.prioridad || 10}</p>
+                </div>
+                <button type="button" onClick={() => editarRegla(regla)} className="p-3 rounded-full bg-zinc-50 text-zinc-500">
+                  <Edit3 size={17} />
+                </button>
+                <button type="button" onClick={() => eliminarRegla(regla.id)} className="p-3 rounded-full bg-red-50 text-red-500">
+                  <Trash2 size={17} />
+                </button>
+              </article>
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore';
-import { Database, GitMerge, Plus, Shield, Trash2 } from 'lucide-react';
+import { Database, GitMerge, Plus, Shield, Sparkles, Trash2, TrendingUp } from 'lucide-react';
 import { getSubcategoriaNombre, normalizar } from '../utils/expenseUtils';
 
 const TIPOS_DESTINO = [
@@ -24,6 +24,8 @@ const CATEGORIAS_BASE = [
   { nombre: 'Casa', tipoDestino: 'hogar', subcategorias: ['UTE', 'OSE', 'Internet', 'Alquiler', 'Gastos comunes', 'Mantenimiento', 'Impuestos'] },
   { nombre: 'Tarjeta de crédito', tipoDestino: 'tarjeta', subcategorias: ['Pago de tarjeta', 'Cuotas', 'Intereses', 'Comisiones'] },
 ];
+
+const EMPTY_REGLA_GLOBAL = { patron: '', tipoDestino: 'general', categoriaGrupo: '', subcategoria: '', prioridad: 10 };
 
 const normalizarSubcategorias = (items = []) => (
   items
@@ -68,7 +70,10 @@ export default function AdminPanel({ user }) {
   const [sugerencias, setSugerencias] = useState([]);
   const [categoriaSugerencias, setCategoriaSugerencias] = useState([]);
   const [productosAgregados, setProductosAgregados] = useState([]);
+  const [reglasGlobales, setReglasGlobales] = useState([]);
   const [productoEdits, setProductoEdits] = useState({});
+  const [formReglaGlobal, setFormReglaGlobal] = useState(EMPTY_REGLA_GLOBAL);
+  const [editandoReglaGlobalId, setEditandoReglaGlobalId] = useState('');
   const [categoriaNombre, setCategoriaNombre] = useState('');
   const [categoriaTipo, setCategoriaTipo] = useState('general');
   const [subcategoriaPorCategoria, setSubcategoriaPorCategoria] = useState({});
@@ -97,7 +102,10 @@ export default function AdminPanel({ user }) {
     const unsubProductos = onSnapshot(collection(db, 'producto_precios_agregados'), (snapshot) => {
       setProductosAgregados(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-    return () => { unsubCat(); unsubAdmins(); unsubSugerencias(); unsubCategoriaSugerencias(); unsubProductos(); };
+    const unsubReglas = onSnapshot(collection(db, 'reglas_categorizacion_globales'), (snapshot) => {
+      setReglasGlobales(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => { unsubCat(); unsubAdmins(); unsubSugerencias(); unsubCategoriaSugerencias(); unsubProductos(); unsubReglas(); };
   }, []);
 
   const categoriasOrdenadas = useMemo(() => (
@@ -125,6 +133,49 @@ export default function AdminPanel({ user }) {
       ? categoriaSubMerge.subcategorias.map(getSubcategoriaNombre).filter(Boolean)
       : []
   ), [categoriaSubMerge]);
+
+  const categoriasReglaGlobal = useMemo(() => (
+    categoriasOrdenadas.filter(categoria => (categoria.tipoDestino || 'general') === formReglaGlobal.tipoDestino)
+  ), [categoriasOrdenadas, formReglaGlobal.tipoDestino]);
+
+  const subcategoriasReglaGlobal = useMemo(() => {
+    const categoria = categoriasReglaGlobal.find(item => item.nombre === formReglaGlobal.categoriaGrupo);
+    return Array.isArray(categoria?.subcategorias) ? categoria.subcategorias.map(getSubcategoriaNombre).filter(Boolean) : [];
+  }, [categoriasReglaGlobal, formReglaGlobal.categoriaGrupo]);
+
+  const rankingSugerencias = useMemo(() => {
+    const grupos = new Map();
+    categoriaSugerencias
+      .filter(item => item.estado === 'pendiente')
+      .forEach((item) => {
+        const key = `${item.tipoDestino || 'general'}:${normalizar(item.nombre)}`;
+        const actual = grupos.get(key) || {
+          nombre: item.nombre,
+          tipoDestino: item.tipoDestino || 'general',
+          cantidad: 0,
+          tipo: 'Categoría',
+        };
+        actual.cantidad += 1;
+        grupos.set(key, actual);
+      });
+
+    sugerencias
+      .filter(item => item.estado === 'pendiente')
+      .forEach((item) => {
+        const key = `${item.tipoDestino || 'general'}:${normalizar(item.categoriaNombre)}:${normalizar(item.nombre)}`;
+        const actual = grupos.get(key) || {
+          nombre: item.nombre,
+          categoriaNombre: item.categoriaNombre,
+          tipoDestino: item.tipoDestino || 'general',
+          cantidad: 0,
+          tipo: 'Subcategoría',
+        };
+        actual.cantidad += 1;
+        grupos.set(key, actual);
+      });
+
+    return [...grupos.values()].sort((a, b) => b.cantidad - a.cantidad).slice(0, 8);
+  }, [categoriaSugerencias, sugerencias]);
 
   const handleAddCategoria = async () => {
     const nombre = categoriaNombre.trim();
@@ -467,8 +518,142 @@ export default function AdminPanel({ user }) {
     setProductoEdits((actual) => ({ ...actual, [producto.id]: '' }));
   };
 
+  const guardarReglaGlobal = async (e) => {
+    e.preventDefault();
+    const patron = formReglaGlobal.patron.trim();
+    if (!patron || !formReglaGlobal.categoriaGrupo) return;
+
+    const payload = {
+      patron,
+      patronNormalizado: normalizar(patron),
+      tipoDestino: formReglaGlobal.tipoDestino || 'general',
+      categoriaGrupo: formReglaGlobal.categoriaGrupo,
+      subcategoria: formReglaGlobal.subcategoria || '',
+      prioridad: Number(formReglaGlobal.prioridad || 10),
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      if (editandoReglaGlobalId) await updateDoc(doc(db, 'reglas_categorizacion_globales', editandoReglaGlobalId), payload);
+      else await addDoc(collection(db, 'reglas_categorizacion_globales'), { ...payload, createdAt: serverTimestamp() });
+      setFormReglaGlobal(EMPTY_REGLA_GLOBAL);
+      setEditandoReglaGlobalId('');
+    } catch (error) {
+      alert('Error al guardar regla: ' + error.message);
+    }
+  };
+
+  const editarReglaGlobal = (regla) => {
+    setEditandoReglaGlobalId(regla.id);
+    setFormReglaGlobal({
+      patron: regla.patron || '',
+      tipoDestino: regla.tipoDestino || 'general',
+      categoriaGrupo: regla.categoriaGrupo || '',
+      subcategoria: regla.subcategoria || '',
+      prioridad: regla.prioridad || 10,
+    });
+  };
+
   return (
     <div className="pt-4 animate-in fade-in duration-500 space-y-8">
+      {rankingSugerencias.length > 0 && (
+        <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingUp size={20} className="text-emerald-600" />
+            <h2 className="text-xl font-bold text-zinc-800">Sugerencias más repetidas</h2>
+          </div>
+          <div className="space-y-2">
+            {rankingSugerencias.map((item) => (
+              <div key={`${item.tipo}-${item.tipoDestino}-${item.categoriaNombre || ''}-${item.nombre}`} className="flex items-center justify-between gap-3 p-3 bg-zinc-50 rounded-2xl border border-zinc-100">
+                <div className="min-w-0">
+                  <p className="font-black text-zinc-900 truncate">{item.nombre}</p>
+                  <p className="text-xs font-bold text-zinc-400">
+                    {item.tipo} · {item.categoriaNombre ? `${item.categoriaNombre} · ` : ''}{item.tipoDestino}
+                  </p>
+                </div>
+                <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-black">{item.cantidad}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles size={20} className="text-emerald-600" />
+          <h2 className="text-xl font-bold text-zinc-800">Reglas globales</h2>
+        </div>
+        <form onSubmit={guardarReglaGlobal} className="space-y-3">
+          <input
+            value={formReglaGlobal.patron}
+            onChange={(e) => setFormReglaGlobal({ ...formReglaGlobal, patron: e.target.value })}
+            className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+            placeholder="Texto a detectar..."
+          />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <select
+              value={formReglaGlobal.tipoDestino}
+              onChange={(e) => setFormReglaGlobal({ ...formReglaGlobal, tipoDestino: e.target.value, categoriaGrupo: '', subcategoria: '' })}
+              className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              {TIPOS_DESTINO.map(tipo => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
+            </select>
+            <input
+              type="number"
+              value={formReglaGlobal.prioridad}
+              onChange={(e) => setFormReglaGlobal({ ...formReglaGlobal, prioridad: e.target.value })}
+              className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+              placeholder="Prioridad"
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <select
+              value={formReglaGlobal.categoriaGrupo}
+              onChange={(e) => setFormReglaGlobal({ ...formReglaGlobal, categoriaGrupo: e.target.value, subcategoria: '' })}
+              className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="">Categoría</option>
+              {categoriasReglaGlobal.map(categoria => <option key={categoria.id} value={categoria.nombre}>{categoria.nombre}</option>)}
+            </select>
+            <select
+              value={formReglaGlobal.subcategoria}
+              onChange={(e) => setFormReglaGlobal({ ...formReglaGlobal, subcategoria: e.target.value })}
+              className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="">Subcategoría opcional</option>
+              {subcategoriasReglaGlobal.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" className="flex-1 p-3 rounded-xl bg-emerald-500 text-white font-bold">
+              {editandoReglaGlobalId ? 'Actualizar regla' : 'Guardar regla'}
+            </button>
+            {editandoReglaGlobalId && (
+              <button type="button" onClick={() => { setEditandoReglaGlobalId(''); setFormReglaGlobal(EMPTY_REGLA_GLOBAL); }} className="px-4 rounded-xl bg-zinc-100 text-zinc-500 font-bold">
+                Cancelar
+              </button>
+            )}
+          </div>
+        </form>
+        <div className="mt-5 space-y-2">
+          {reglasGlobales.length === 0 && <p className="text-sm text-zinc-400 text-center py-4">No hay reglas globales.</p>}
+          {[...reglasGlobales].sort((a, b) => Number(b.prioridad || 0) - Number(a.prioridad || 0)).map(regla => (
+            <div key={regla.id} className="flex items-center gap-3 p-3 bg-zinc-50 rounded-2xl border border-zinc-100">
+              <div className="flex-1 min-w-0">
+                <p className="font-black text-zinc-900 truncate">{regla.patron}</p>
+                <p className="text-xs font-bold text-zinc-500 truncate">{regla.tipoDestino} · {regla.categoriaGrupo}{regla.subcategoria ? ` · ${regla.subcategoria}` : ''}</p>
+              </div>
+              <button type="button" onClick={() => editarReglaGlobal(regla)} className="px-3 py-2 rounded-xl bg-white border border-zinc-200 text-zinc-600 font-bold text-xs">
+                Editar
+              </button>
+              <button type="button" onClick={() => handleDelete('reglas_categorizacion_globales', regla.id)} className="p-2 rounded-xl bg-red-50 text-red-500">
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-zinc-100">
         <div className="flex items-center gap-2 mb-4">
           <Database size={20} className="text-indigo-600" />

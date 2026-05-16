@@ -1,6 +1,19 @@
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
 const MAX_PDF_PAGES = 4;
+const MAX_SPREADSHEET_ROWS = 700;
+const MAX_SPREADSHEET_SHEETS = 4;
+
+const isSpreadsheet = (file) => {
+  const name = file.name || '';
+  return /\.(csv|tsv|xlsx|xls)$/i.test(name)
+    || [
+      'text/csv',
+      'text/tab-separated-values',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ].includes(file.type);
+};
 
 const canvasFromImageFile = async (file) => {
   const bitmap = await createImageBitmap(file);
@@ -63,7 +76,41 @@ const extractTextFromPdf = async (file, onProgress) => {
   return chunks.join('\n\n').trim();
 };
 
+const extractTextFromSpreadsheet = async (file, onProgress) => {
+  onProgress?.('Leyendo planilla...');
+  const XLSX = await import('xlsx');
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+  const sheets = workbook.SheetNames.slice(0, MAX_SPREADSHEET_SHEETS);
+  const chunks = [`PLANILLA: ${file.name}`];
+
+  sheets.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: '',
+      raw: false,
+      dateNF: 'yyyy-mm-dd',
+    });
+    const usefulRows = rows
+      .map(row => row.map(cell => String(cell ?? '').trim()))
+      .filter(row => row.some(Boolean))
+      .slice(0, MAX_SPREADSHEET_ROWS);
+
+    chunks.push(`\nHOJA: ${sheetName}`);
+    usefulRows.forEach((row, index) => {
+      chunks.push(`Fila ${index + 1}: ${row.join(' | ')}`);
+    });
+  });
+
+  return chunks.join('\n').slice(0, 60000);
+};
+
 export const extractTextFromDocument = async (file, onProgress) => {
+  if (isSpreadsheet(file)) {
+    return extractTextFromSpreadsheet(file, onProgress);
+  }
+
   if (file.type === 'application/pdf') {
     return extractTextFromPdf(file, onProgress);
   }
@@ -72,5 +119,5 @@ export const extractTextFromDocument = async (file, onProgress) => {
     return extractTextFromImage(file, onProgress);
   }
 
-  throw new Error('Formato no soportado. Usá PDF o imagen.');
+  throw new Error('Formato no soportado. Usá PDF, imagen o planilla CSV/XLSX.');
 };

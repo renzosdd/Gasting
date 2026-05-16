@@ -40,6 +40,24 @@ export const getSubcategorias = (categoria) => (
   Array.isArray(categoria?.subcategorias) ? categoria.subcategorias.map(getSubcategoriaNombre).filter(Boolean) : []
 );
 
+export const todayInputValue = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+export const dateToInputValue = (fecha) => {
+  const date = fecha?.toDate?.() || (fecha instanceof Date ? fecha : null);
+  if (!date) return todayInputValue();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+export const dateInputToDate = (value) => {
+  if (!value) return new Date();
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return new Date();
+  return new Date(year, month - 1, day, 12, 0, 0, 0);
+};
+
 export const findCategoriaByName = (categorias, nombre) => (
   categorias.find(categoria => normalizar(categoria.nombre) === normalizar(nombre))
 );
