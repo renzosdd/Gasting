@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react';
 import { auth, db, loginConGoogle, logout } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { BarChart3, FileText, LogOut, Settings, User, X } from 'lucide-react';
+import { BarChart3, FileText, Home as HomeIcon, LogOut, Settings, User, X } from 'lucide-react';
 import ExpenseForm from './components/ExpenseForm';
 import AdminPanel from './components/AdminPanel';
 import EntitiesManager from './components/EntitiesManager';
 import LandingPage from './components/LandingPage';
 import Home from './components/Home';
 import ImportManager from './components/ImportManager';
+import Reports from './components/Reports';
 
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'renzodogliotti@gmail.com';
 
@@ -98,6 +99,7 @@ function App() {
             focusPendingSignal={homePendingSignal}
           />
         )}
+        {vistaActiva === 'reports' && <Reports user={user} />}
         {vistaActiva === 'profile' && <EntitiesManager user={user} />}
         {vistaActiva === 'imports' && <ImportManager user={user} />}
         {vistaActiva === 'admin' && isAdmin && <AdminPanel user={user} />}
@@ -144,7 +146,16 @@ function App() {
             onClick={() => setVistaActiva('home')}
             className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'home' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
           >
-            <BarChart3 size={24} strokeWidth={vistaActiva === 'home' ? 2.5 : 2} />
+            <HomeIcon size={24} strokeWidth={vistaActiva === 'home' ? 2.5 : 2} />
+          </button>
+
+          <div className="w-px h-8 bg-zinc-700"></div>
+
+          <button
+            onClick={() => setVistaActiva('reports')}
+            className={`flex-1 flex justify-center py-3 rounded-full transition-all ${vistaActiva === 'reports' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'}`}
+          >
+            <BarChart3 size={24} strokeWidth={vistaActiva === 'reports' ? 2.5 : 2} />
           </button>
           
           <div className="w-px h-8 bg-zinc-700"></div>
